@@ -40,8 +40,6 @@ FrontLightWidget.layout = function(self)
         }
     end
 
-    -- Felső elválasztó: Size.span.vertical_large * 4, ugyanannyi mint a warmth szekció előtt
-    -- Alsó padding: self.span * 2, hogy illeszkedjen a többi sor ritmusához
     table.insert(self.frame[1], VerticalGroup:new{
         VerticalSpan:new{ width = Size.span.vertical_large * 4 },
         centered(TextWidget:new{
