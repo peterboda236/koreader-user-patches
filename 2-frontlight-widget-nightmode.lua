@@ -1,3 +1,4 @@
+-- Add Night mode Toggle to the bottom of the frontlight widget.
 local FrontLightWidget = require("ui/widget/frontlightwidget")
 local Button = require("ui/widget/button")
 local CenterContainer = require("ui/widget/container/centercontainer")
