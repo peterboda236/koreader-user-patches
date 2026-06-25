@@ -1,6 +1,6 @@
 --[[
 Reading Insights Popup
-Version 1.1.2
+Version 1.1.3
 Based on: https://github.com/quanganhdo/koreader-user-patches/blob/main/2-reading-insights-popup.lua
 
 Full-screen scrollable popup showing reading history from statistics.sqlite3.
@@ -89,6 +89,7 @@ local _cache = {
     last_week_daily        = nil,
     last_week_daily_minute = nil,
 }
+
 local _yearly_cache  = {}
 local _monthly_cache = {}
 
@@ -528,6 +529,22 @@ local function buildLayout(screen_w, padding_h, column_gap)
         content_width = content_width,
         col_width     = col_width,
     }
+end
+
+local _cached_fonts  = nil
+local _cached_layout = nil
+
+local function getCachedFonts()
+    if not _cached_fonts then _cached_fonts = buildSerifFonts() end
+    return _cached_fonts
+end
+
+local function getCachedLayout()
+    if not _cached_layout then
+        local screen_w = Screen:getWidth()
+        _cached_layout = buildLayout(screen_w, Size.padding.large, Screen:scaleBySize(20))
+    end
+    return _cached_layout
 end
 
 local function buildColumnSeparator(column_gap, height)
@@ -1984,8 +2001,8 @@ end
 function ReadingInsightsPopup:_buildUI()
     local screen_w = Screen:getWidth()
     local screen_h = Screen:getHeight()
-    local fonts    = buildSerifFonts()
-    local layout   = buildLayout(screen_w, Size.padding.large, Screen:scaleBySize(20))
+    local fonts    = getCachedFonts()
+    local layout   = getCachedLayout()
 
     local sections = buildInsightsSections(
         self,
