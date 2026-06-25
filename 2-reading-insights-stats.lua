@@ -1,6 +1,6 @@
 --[[
 Reading Insights Popup
-Version 1.1.1
+Version 1.1.2
 Based on: https://github.com/quanganhdo/koreader-user-patches/blob/main/2-reading-insights-popup.lua
 
 Full-screen scrollable popup showing reading history from statistics.sqlite3.
@@ -1414,56 +1414,35 @@ function ReadingInsightsPopup:getYearlyStats(year)
     local key = year .. ":v3:" .. todayDateStr()
     if ENABLE_CACHE and _yearly_cache[key] then return _yearly_cache[key] end
 
-    local stats  = { days = 0, pages = 0, duration = 0, books_started = 0 }
+    local stats = { days = 0, pages = 0, duration = 0, books_started = 0 }
     local result = withStatsDb(stats, function(conn)
         local year_str = tostring(year)
-
-        local sql_days = string.format([[
-            SELECT COUNT(DISTINCT date(start_time, 'unixepoch', 'localtime'))
-            FROM page_stat
-            WHERE strftime('%%Y', start_time, 'unixepoch', 'localtime') = '%s'
-        ]], year_str)
-        withStatement(conn, sql_days, function(stmt_days)
-            for row in stmt_days:rows() do stats.days = tonumber(row[1]) or 0 end
-        end)
-
-        local sql_pages = string.format([[
-            SELECT count(*)
-            FROM (
-                SELECT 1
+        local sql = string.format([[
+            WITH dedup AS (
+                SELECT id_book,
+                       page,
+                       date(start_time, 'unixepoch', 'localtime') AS day,
+                       SUM(duration) AS dur
                 FROM page_stat
                 WHERE strftime('%%Y', start_time, 'unixepoch', 'localtime') = '%s'
-                GROUP BY id_book, page, strftime('%%Y-%%m-%%d', start_time, 'unixepoch', 'localtime')
+                GROUP BY id_book, page, day
             )
+            SELECT
+                COUNT(DISTINCT day)      AS days_read,
+                COUNT(*)                 AS pages_read,
+                SUM(dur)                 AS total_duration,
+                COUNT(DISTINCT id_book)  AS books_started
+            FROM dedup
         ]], year_str)
-        withStatement(conn, sql_pages, function(stmt_pages)
-            for row in stmt_pages:rows() do stats.pages = tonumber(row[1]) or 0 end
-        end)
 
-        local sql_duration = string.format([[
-            SELECT SUM(sum_duration)
-            FROM (
-                SELECT SUM(duration) AS sum_duration
-                FROM page_stat
-                WHERE strftime('%%Y', start_time, 'unixepoch', 'localtime') = '%s'
-                GROUP BY id_book, page, date(start_time, 'unixepoch', 'localtime')
-            )
-        ]], year_str)
-        withStatement(conn, sql_duration, function(stmt_duration)
-            for row in stmt_duration:rows() do
-                stats.duration = tonumber(row[1]) or 0
+        withStatement(conn, sql, function(stmt)
+            for row in stmt:rows() do
+                stats.days          = tonumber(row[1]) or 0
+                stats.pages         = tonumber(row[2]) or 0
+                stats.duration      = tonumber(row[3]) or 0
+                stats.books_started = tonumber(row[4]) or 0
             end
         end)
-
-        local sql_started = string.format([[
-            SELECT COUNT(DISTINCT id_book)
-            FROM page_stat
-            WHERE strftime('%%Y', start_time, 'unixepoch', 'localtime') = '%s'
-        ]], year_str)
-        withStatement(conn, sql_started, function(stmt_started)
-            for row in stmt_started:rows() do stats.books_started = tonumber(row[1]) or 0 end
-        end)
-
         return stats
     end)
 
@@ -1510,38 +1489,42 @@ end
 
 function ReadingInsightsPopup:getAllTimeStats()
     local today = todayDateStr()
-    if ENABLE_CACHE and _cache.all_time and _cache.all_time_date == today then return _cache.all_time end
-
-    local year_range = self:getYearRange()
-    local total_hours = 0
-    local total_pages = 0
-    local total_duration = 0
-
-    for year = year_range.min_year, year_range.max_year do
-        local ys = self:getYearlyStats(year)
-
-        local rounded_minutes = Math.round(ys.duration / 60)
-        local h = math.floor(math.floor(rounded_minutes / 60 * 10) / 10)
-        total_hours = total_hours + h
-        total_pages = total_pages + (ys.pages or 0)
-        total_duration = total_duration + (ys.duration or 0)
+    if ENABLE_CACHE and _cache.all_time and _cache.all_time_date == today then
+        return _cache.all_time
     end
 
-    local book_count = withStatsDb(0, function(conn)
-        local count = 0
-        withStatement(conn, "SELECT COUNT(DISTINCT id_book) FROM page_stat", function(stmt)
-            for row in stmt:rows() do count = tonumber(row[1]) or 0 end
+    return withStatsDb({ hours=0, pages=0, book_count=0, duration=0 }, function(conn)
+        local duration, pages, books = 0, 0, 0
+        withStatement(conn, [[
+            SELECT SUM(sum_dur), COUNT(DISTINCT dedup_page)
+            FROM (
+                SELECT SUM(duration) AS sum_dur, id_book || '-' || page AS dedup_page
+                FROM page_stat
+                GROUP BY id_book, page, date(start_time, 'unixepoch', 'localtime')
+            )
+        ]], function(stmt)
+            for row in stmt:rows() do
+                duration = tonumber(row[1]) or 0
+                pages    = tonumber(row[2]) or 0
+            end
         end)
-        return count
+        withStatement(conn, "SELECT COUNT(DISTINCT id_book) FROM page_stat", function(stmt)
+            for row in stmt:rows() do books = tonumber(row[1]) or 0 end
+        end)
+        local mins = Math.round(duration / 60)
+        local result = {
+            hours      = math.floor(mins / 60),
+            pages      = pages,
+            book_count = books,
+            duration   = duration,
+        }
+        if ENABLE_CACHE then
+            _cache.all_time      = result
+            _cache.all_time_date = today
+            _stale_cache.all_time = result
+        end
+        return result
     end)
-
-    local result = { hours = total_hours, pages = total_pages, book_count = book_count, duration = total_duration }
-    if ENABLE_CACHE then
-        _cache.all_time      = result
-        _cache.all_time_date = today
-        _stale_cache.all_time = result
-    end
-    return result
 end
 
 -- Returns 7-day averages: avg_seconds and avg_pages per day.
