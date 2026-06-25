@@ -1,6 +1,6 @@
 --[[
 Reading Insights Popup
-Version 1.1.0
+Version 1.1.1
 Based on: https://github.com/quanganhdo/koreader-user-patches/blob/main/2-reading-insights-popup.lua
 
 Full-screen scrollable popup showing reading history from statistics.sqlite3.
@@ -19,9 +19,10 @@ Gestures:
   - Long press monthly chart header    open CalendarView for the current month
   - Swipe left/right                   change year
   - Swipe down / any key               close
+  - Tap on book list element           show book stats
 
 Caching:
-  Streaks and year range cached per day; last-week stats per minute;
+  Streaks cached per minute; year range cached per day; last-week stats per minute;
   yearly and monthly stats per year per day. Stale-while-revalidate:
   the popup opens immediately with cached data while fresh values load
   in the background.
@@ -1240,8 +1241,8 @@ ReadingInsightsPopup = InputContainer:extend{
 }
 
 function ReadingInsightsPopup:calculateStreaks()
-    local today = todayDateStr()
-    if ENABLE_CACHE and _cache.streaks and _cache.streaks_date == today then
+    local minute = currentMinute()
+    if ENABLE_CACHE and _cache.streaks and _cache.streaks_date == minute then
         return _cache.streaks
     end
 
@@ -1307,7 +1308,7 @@ function ReadingInsightsPopup:calculateStreaks()
 
     if ENABLE_CACHE then
         _cache.streaks      = result
-        _cache.streaks_date = today
+        _cache.streaks_date = minute
         _stale_cache.streaks = result
     end
     return result
