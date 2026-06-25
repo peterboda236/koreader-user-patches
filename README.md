@@ -9,12 +9,16 @@ A collection of user patches for [KOReader](https://github.com/koreader/koreader
 ### 🌙 Frontlight Widget — Night Mode Toggle
 **`2-frontlight-widget-nightmode.lua`**
 
+<img width="384" height="512" alt="kép" src="https://github.com/user-attachments/assets/2401c194-0ae3-4c6e-8b7f-1c7c79f9a10d" />
+
 Adds a **Night Mode** toggle button directly to the bottom of the built-in frontlight widget. Toggle inverts the screen and persists the setting — no need to dig through menus.
 
 ---
 
 ### 📊 Reading Insights
 **`2-reading-insights-stats.lua`**
+
+<img width="384" height="512" alt="kép" src="https://github.com/user-attachments/assets/c0669dbe-5e8e-4b40-a3c7-5299036e477b" />
 
 A full-screen scrollable overlay with a comprehensive overview of your reading history, powered by KOReader's statistics database.
 
@@ -36,6 +40,8 @@ A full-screen scrollable overlay with a comprehensive overview of your reading h
 
 ### 📖 Reading Stats Popup
 **`2-reading-stats-popup.lua`**
+
+<img width="384" height="512" alt="kép" src="https://github.com/user-attachments/assets/5f951bc0-a50a-416a-91dc-bb63a43f14ea" />
 
 A compact overlay displayed while reading, showing live statistics for the current book.
 
