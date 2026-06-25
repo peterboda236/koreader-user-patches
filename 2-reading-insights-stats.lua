@@ -1,6 +1,6 @@
 --[[
 Reading Insights Popup
-Version 1.1.3
+Version 1.1.4
 Based on: https://github.com/quanganhdo/koreader-user-patches/blob/main/2-reading-insights-popup.lua
 
 Full-screen scrollable popup showing reading history from statistics.sqlite3.
@@ -385,6 +385,10 @@ local function withStatsDb(fallback, fn)
 
     local conn = SQ3.open(db_path)
     if not conn then return fallback end
+
+    pcall(function()
+        conn:exec("PRAGMA journal_mode=WAL; PRAGMA cache_size=2000; PRAGMA temp_store=MEMORY;")
+    end)
 
     local ok, result = pcall(fn, conn)
     conn:close()
@@ -1544,75 +1548,23 @@ function ReadingInsightsPopup:getAllTimeStats()
     end)
 end
 
--- Returns 7-day averages: avg_seconds and avg_pages per day.
-function ReadingInsightsPopup:getLastWeekStats()
-    local today = todayDateStr()
+-- Returns both last-week stats in one DB connection:
+--   last_week:       { avg_seconds, avg_pages }
+--   last_week_daily: array[7] of { hours, seconds, label, midnight_ts }, index 1 = today
+function ReadingInsightsPopup:getLastWeekAll()
     local minute = currentMinute()
-    if ENABLE_CACHE and _cache.last_week and _cache.last_week_minute == minute then
-        return _cache.last_week
-    end
-
-    local result = { avg_seconds = 0, avg_pages = 0 }
-
-    withStatsDb(nil, function(conn)
-
-        local now_ts  = os.time()
-        local now_t   = os.date("*t")
-        local today_midnight = now_ts - (now_t.hour * 3600 + now_t.min * 60 + now_t.sec)
-        local week_start_ts  = today_midnight - 6 * 86400
-
-        local sql_sec = string.format([[
-            SELECT SUM(sum_dur)
-            FROM (
-                SELECT SUM(duration) AS sum_dur
-                FROM page_stat
-                WHERE start_time >= %d
-                GROUP BY id_book, page, date(start_time, 'unixepoch', 'localtime')
-            )
-        ]], week_start_ts)
-        withStatement(conn, sql_sec, function(stmt)
-            for row in stmt:rows() do
-                result.avg_seconds = (tonumber(row[1]) or 0) / 7
-            end
-        end)
-
-        local sql_pages = string.format([[
-            SELECT COUNT(*)
-            FROM (
-                SELECT 1
-                FROM page_stat
-                WHERE start_time >= %d
-                GROUP BY id_book, page, date(start_time, 'unixepoch', 'localtime')
-            )
-        ]], week_start_ts)
-        withStatement(conn, sql_pages, function(stmt)
-            for row in stmt:rows() do
-                result.avg_pages = (tonumber(row[1]) or 0) / 7
-            end
-        end)
-    end)
-
-    if ENABLE_CACHE then
-        _cache.last_week        = result
-        _cache.last_week_minute = minute
-        _stale_cache.last_week  = result
-    end
-    return result
-end
-
--- Returns 7-day reading data array (index 1 = today). Each entry: { hours, seconds, label }.
-function ReadingInsightsPopup:getLastWeekDailyHours()
-    local minute = currentMinute()
-    if ENABLE_CACHE and _cache.last_week_daily and _cache.last_week_daily_minute == minute then
-        return _cache.last_week_daily
+    local lw_ok    = ENABLE_CACHE and _cache.last_week       and _cache.last_week_minute       == minute
+    local daily_ok = ENABLE_CACHE and _cache.last_week_daily and _cache.last_week_daily_minute == minute
+    if lw_ok and daily_ok then
+        return _cache.last_week, _cache.last_week_daily
     end
 
     local now_ts  = os.time()
     local now_t   = os.date("*t")
     local today_midnight = now_ts - (now_t.hour * 3600 + now_t.min * 60 + now_t.sec)
+    local week_start_ts  = today_midnight - 6 * 86400
 
     local DOW_KEYS = { [0]="Sun", [1]="Mon", [2]="Tue", [3]="Wed", [4]="Thu", [5]="Fri", [6]="Sat" }
-
     local date_info = {}
     for i = 0, 6 do
         local day_midnight = today_midnight - i * 86400
@@ -1629,13 +1581,16 @@ function ReadingInsightsPopup:getLastWeekDailyHours()
         date_info[i + 1] = { date_str = date_str, label = label, midnight_ts = day_midnight }
     end
 
-    local hours_by_date   = {}
-    local seconds_by_date = {}
+    local lw_result    = lw_ok    and _cache.last_week       or { avg_seconds = 0, avg_pages = 0 }
+    local daily_result = daily_ok and _cache.last_week_daily or nil
+
     withStatsDb(nil, function(conn)
-        local week_start_ts = today_midnight - 6 * 86400
+        -- Single query: per-day totals for the last 7 days.
+        -- From this we derive both the 7-day averages and the per-day chart data.
         local sql = string.format([[
             SELECT date(start_time, 'unixepoch', 'localtime') AS day,
-                   SUM(sum_dur) AS total_sec
+                   SUM(sum_dur)    AS total_sec,
+                   COUNT(*)        AS total_pages
             FROM (
                 SELECT start_time,
                        SUM(duration) AS sum_dur
@@ -1645,38 +1600,67 @@ function ReadingInsightsPopup:getLastWeekDailyHours()
             )
             GROUP BY day
         ]], week_start_ts)
-        withStatement(conn, sql, function(stmt)
-            for row in stmt:rows() do
-                local secs = tonumber(row[2]) or 0
+
+        local seconds_by_date = {}
+        local pages_by_date   = {}
+        if not lw_ok or not daily_ok then
+            withStatement(conn, sql, function(stmt)
+                for row in stmt:rows() do
+                    seconds_by_date[row[1]] = tonumber(row[2]) or 0
+                    pages_by_date[row[1]]   = tonumber(row[3]) or 0
+                end
+            end)
+        end
+
+        if not lw_ok then
+            local total_sec   = 0
+            local total_pages = 0
+            for _, secs in pairs(seconds_by_date) do total_sec   = total_sec   + secs end
+            for _, pgs  in pairs(pages_by_date)   do total_pages = total_pages + pgs  end
+            lw_result = { avg_seconds = total_sec / 7, avg_pages = total_pages / 7 }
+        end
+
+        if not daily_ok then
+            local hours_by_date = {}
+            for date_str, secs in pairs(seconds_by_date) do
                 local h = secs / 3600.0
                 if h >= 1 then
                     h = math.floor(h + 0.5)
                 elseif h > 0 then
                     h = math.floor(h * 10 + 0.5) / 10
                 end
-                hours_by_date[row[1]]   = h
-                seconds_by_date[row[1]] = secs
+                hours_by_date[date_str] = h
             end
-        end)
+            daily_result = {}
+            for i = 1, 7 do
+                local di = date_info[i]
+                daily_result[i] = {
+                    hours       = hours_by_date[di.date_str]   or 0,
+                    seconds     = seconds_by_date[di.date_str] or 0,
+                    label       = di.label,
+                    midnight_ts = di.midnight_ts,
+                }
+            end
+        end
     end)
 
-    local result = {}
-    for i = 1, 7 do
-        local di = date_info[i]
-        result[i] = {
-            hours       = hours_by_date[di.date_str]   or 0,
-            seconds     = seconds_by_date[di.date_str] or 0,
-            label       = di.label,
-            midnight_ts = di.midnight_ts,
-        }
+    if not daily_result then
+        daily_result = {}
+        for i = 1, 7 do
+            local di = date_info[i]
+            daily_result[i] = { hours = 0, seconds = 0, label = di.label, midnight_ts = di.midnight_ts }
+        end
     end
 
     if ENABLE_CACHE then
-        _cache.last_week_daily        = result
+        _cache.last_week              = lw_result
+        _cache.last_week_minute       = minute
+        _stale_cache.last_week        = lw_result
+        _cache.last_week_daily        = daily_result
         _cache.last_week_daily_minute = minute
-        _stale_cache.last_week_daily  = result
+        _stale_cache.last_week_daily  = daily_result
     end
-    return result
+    return lw_result, daily_result
 end
 
 local function getBooksForPeriod(period_format, period_value)
@@ -2070,17 +2054,37 @@ end
 
 function ReadingInsightsPopup:_loadAndRebuild()
     -- Re-fetch all data; each getter has its own cache key so this is cheap when data is fresh.
-    self._streaks = self:calculateStreaks()
-    self._year_range = self:getYearRange()
-    self._yearly   = self:getYearlyStats(self.selected_year)
-    self._all_time = self:getAllTimeStats()
-    self._last_week = self:getLastWeekStats()
-    self._last_week_daily = self:getLastWeekDailyHours()
+    local new_streaks         = self:calculateStreaks()
+    local new_year_range      = self:getYearRange()
+    local new_yearly          = self:getYearlyStats(self.selected_year)
+    local new_all_time        = self:getAllTimeStats()
+    local new_last_week, new_last_week_daily = self:getLastWeekAll()
+    local new_monthly
     if self.mode == INSIGHTS_MODE_HOURS then
-        self._monthly = self:getMonthlyReadingHours(self.selected_year)
+        new_monthly = self:getMonthlyReadingHours(self.selected_year)
     else
-        self._monthly = self:getMonthlyReadingDays(self.selected_year)
+        new_monthly = self:getMonthlyReadingDays(self.selected_year)
     end
+
+    -- Skip rebuild if the background fetch returned the exact same table references
+    -- (i.e. all data came from cache and nothing changed).
+    if new_streaks         == self._streaks         and
+       new_year_range      == self._year_range      and
+       new_yearly          == self._yearly          and
+       new_all_time        == self._all_time        and
+       new_last_week       == self._last_week       and
+       new_last_week_daily == self._last_week_daily and
+       new_monthly         == self._monthly         then
+        return
+    end
+
+    self._streaks         = new_streaks
+    self._year_range      = new_year_range
+    self._yearly          = new_yearly
+    self._all_time        = new_all_time
+    self._last_week       = new_last_week
+    self._last_week_daily = new_last_week_daily
+    self._monthly         = new_monthly
 
     self:_buildUI()
     UIManager:setDirty(self, function()
@@ -2106,12 +2110,12 @@ function ReadingInsightsPopup:init()
                                   "days:")
         local month_key = month_key_prefix .. (self.selected_year or tonumber(os.date("%Y"))) .. ":" .. todayDateStr()
         self._monthly = self._monthly or _monthly_cache[month_key]
-        self._last_week = self._last_week or (
-            _cache.last_week and _cache.last_week_minute == minute and _cache.last_week or nil
-        )
-        self._last_week_daily = self._last_week_daily or (
-            _cache.last_week_daily and _cache.last_week_daily_minute == minute and _cache.last_week_daily or nil
-        )
+        if not self._last_week or not self._last_week_daily then
+            local lw_ok    = _cache.last_week       and _cache.last_week_minute       == minute
+            local daily_ok = _cache.last_week_daily and _cache.last_week_daily_minute == minute
+            if lw_ok    then self._last_week       = self._last_week       or _cache.last_week       end
+            if daily_ok then self._last_week_daily = self._last_week_daily or _cache.last_week_daily end
+        end
     end
 
     -- Fall back to stale cache for anything still missing (e.g. after a restart or day rollover).
@@ -2128,6 +2132,14 @@ function ReadingInsightsPopup:init()
 
         if not self._year_range then
             self._year_range = _stale_cache.year_range
+            -- Ensure selected_year stays within the stale range if we got one.
+            if self._year_range and self.selected_year then
+                if self.selected_year < self._year_range.min_year then
+                    self.selected_year = self._year_range.min_year
+                elseif self.selected_year > self._year_range.max_year then
+                    self.selected_year = self._year_range.max_year
+                end
+            end
         end
 
         if not self._all_time then
@@ -2237,8 +2249,26 @@ function ReadingInsightsPopup:toggleInsightsMode()
     local new_mode = self.mode == INSIGHTS_MODE_HOURS and INSIGHTS_MODE_DAYS or INSIGHTS_MODE_HOURS
     saveInsightsMode(new_mode)
     self.mode     = new_mode
+    -- Try to serve stale monthly data for the new mode before the background fetch.
+    local month_key_prefix_new = (new_mode == INSIGHTS_MODE_HOURS and "hours:" or "days:")
+    local month_key_fb = month_key_prefix_new .. (self.selected_year or tonumber(os.date("%Y"))) .. ":"
     self._monthly = nil
-    self:_loadAndRebuild()
+    if ENABLE_CACHE then
+        for k, v in pairs(_stale_monthly) do
+            if k:sub(1, #month_key_fb) == month_key_fb then
+                self._monthly = v
+                break
+            end
+        end
+    end
+    self:_buildUI()
+    UIManager:setDirty(self, function()
+        return "ui", self.popup_frame.dimen
+    end)
+    UIManager:scheduleIn(0, function()
+        if self._closed then return end
+        self:_loadAndRebuild()
+    end)
     return true
 end
 
@@ -2251,10 +2281,28 @@ function ReadingInsightsPopup:cycleInsightsMode()
     end
 
     saveInsightsMode(new_mode)
-
     self.mode = new_mode
+
+    -- Try to serve stale monthly data for the new mode before the background fetch.
+    local month_key_prefix_new = (new_mode == INSIGHTS_MODE_HOURS and "hours:" or "days:")
+    local month_key_fb = month_key_prefix_new .. (self.selected_year or tonumber(os.date("%Y"))) .. ":"
     self._monthly = nil
-    self:_loadAndRebuild()
+    if ENABLE_CACHE then
+        for k, v in pairs(_stale_monthly) do
+            if k:sub(1, #month_key_fb) == month_key_fb then
+                self._monthly = v
+                break
+            end
+        end
+    end
+    self:_buildUI()
+    UIManager:setDirty(self, function()
+        return "ui", self.popup_frame.dimen
+    end)
+    UIManager:scheduleIn(0, function()
+        if self._closed then return end
+        self:_loadAndRebuild()
+    end)
     return true
 end
 
@@ -2262,9 +2310,35 @@ function ReadingInsightsPopup:onGoToPrevYear()
     local yr = self._year_range or self.year_range
     if yr and self.selected_year > yr.min_year then
         self.selected_year = self.selected_year - 1
-        self._monthly      = nil
-        self._yearly       = nil
-        self:_loadAndRebuild()
+        self._monthly = nil
+        self._yearly  = nil
+        -- Serve stale data for the target year immediately.
+        local year_key_any   = self.selected_year .. ":v3:"
+        local mode_fb = self.mode or INSIGHTS_MODE_HOURS
+        local month_key_prefix_fb = (mode_fb == INSIGHTS_MODE_HOURS and "hours:" or "days:")
+        local month_key_fb = month_key_prefix_fb .. self.selected_year .. ":"
+        if ENABLE_CACHE then
+            for k, v in pairs(_stale_yearly) do
+                if k:sub(1, #year_key_any) == year_key_any then
+                    self._yearly = v
+                    break
+                end
+            end
+            for k, v in pairs(_stale_monthly) do
+                if k:sub(1, #month_key_fb) == month_key_fb then
+                    self._monthly = v
+                    break
+                end
+            end
+        end
+        self:_buildUI()
+        UIManager:setDirty(self, function()
+            return "ui", self.popup_frame.dimen
+        end)
+        UIManager:scheduleIn(0, function()
+            if self._closed then return end
+            self:_loadAndRebuild()
+        end)
     end
     return true
 end
@@ -2283,7 +2357,33 @@ function ReadingInsightsPopup:onGoToNextYear()
         self.selected_year = self.selected_year + 1
         self._monthly      = nil
         self._yearly       = nil
-        self:_loadAndRebuild()
+        -- Serve stale data for the target year immediately.
+        local year_key_any   = self.selected_year .. ":v3:"
+        local mode_fb = self.mode or INSIGHTS_MODE_HOURS
+        local month_key_prefix_fb = (mode_fb == INSIGHTS_MODE_HOURS and "hours:" or "days:")
+        local month_key_fb = month_key_prefix_fb .. self.selected_year .. ":"
+        if ENABLE_CACHE then
+            for k, v in pairs(_stale_yearly) do
+                if k:sub(1, #year_key_any) == year_key_any then
+                    self._yearly = v
+                    break
+                end
+            end
+            for k, v in pairs(_stale_monthly) do
+                if k:sub(1, #month_key_fb) == month_key_fb then
+                    self._monthly = v
+                    break
+                end
+            end
+        end
+        self:_buildUI()
+        UIManager:setDirty(self, function()
+            return "ui", self.popup_frame.dimen
+        end)
+        UIManager:scheduleIn(0, function()
+            if self._closed then return end
+            self:_loadAndRebuild()
+        end)
     end
     return true
 end
