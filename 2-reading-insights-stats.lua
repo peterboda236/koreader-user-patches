@@ -1,6 +1,6 @@
 --[[
 Reading Insights Popup
-Version 1.1.4
+Version 1.1.5
 Based on: https://github.com/quanganhdo/koreader-user-patches/blob/main/2-reading-insights-popup.lua
 
 Full-screen scrollable popup showing reading history from statistics.sqlite3.
@@ -15,6 +15,7 @@ Sections:
 Gestures:
   - Tap yearly value or monthly bar    open book list for that period
   - Tap monthly chart header           toggle hours/days mode
+  - Tap on Streak                      show the streak period date
   - Long press title bar               force-reload all data from DB
   - Long press monthly chart header    open CalendarView for the current month
   - Swipe left/right                   change year
@@ -311,6 +312,18 @@ end
 
 -- Number formatting: HU uses space/comma, EN uses comma/period.
 -- Small integers (< 10 000, no decimals) skip the regex for speed.
+-- Format a YYYY-MM-DD string for display (EN: DD/MM/YYYY, HU: YYYY.MM.DD.)
+local function formatDateForDisplay(date_str)
+    if not date_str then return "?" end
+    local y, m, d = date_str:match("^(%d+)-(%d+)-(%d+)$")
+    if not y then return date_str end
+    if getLangBase() == "hu" then
+        return string.format("%s.%s.%s.", y, m, d)
+    else
+        return string.format("%s/%s/%s", d, m, y)
+    end
+end
+
 local function formatNumber(n, decimals)
     if n == nil then return "" end
     decimals = decimals or 0
@@ -439,6 +452,54 @@ local function computeStreaks(entries_desc, is_consecutive, is_current_start)
     end
 
     return current, best
+end
+
+-- Like computeStreaks but also returns {start, end} date strings for current and best streaks.
+local function computeStreaksWithDates(entries_desc, is_consecutive, is_current_start)
+    if #entries_desc == 0 then
+        return 0, 0, nil, nil
+    end
+
+    local current = 0
+    local current_start, current_end
+    if is_current_start(entries_desc[1]) then
+        current = 1
+        current_end   = entries_desc[1]
+        current_start = entries_desc[1]
+        for i = 2, #entries_desc do
+            if is_consecutive(entries_desc[i - 1], entries_desc[i]) then
+                current = current + 1
+                current_start = entries_desc[i]
+            else
+                break
+            end
+        end
+    end
+
+    local best = 1
+    local run = 1
+    local run_start_idx = 1
+    local best_start_idx, best_end_idx = 1, 1
+    for i = 2, #entries_desc do
+        if is_consecutive(entries_desc[i - 1], entries_desc[i]) then
+            run = run + 1
+            if run > best then
+                best = run
+                best_end_idx   = run_start_idx
+                best_start_idx = i
+            end
+        else
+            run = 1
+            run_start_idx = i
+        end
+    end
+
+    local best_dates  = { start = entries_desc[best_start_idx], end_ = entries_desc[best_end_idx] }
+    local current_dates = current > 0
+        and { start = current_start, end_ = current_end }
+        or nil
+
+    return current, best, current_dates, best_dates
 end
 
 local function parseDateYMD(date_str)
@@ -1033,6 +1094,48 @@ local function buildWeeklyChart(popup_self, daily_data, layout, fonts)
     }
 end
 
+-- Convert "YYYY-WW" to the Monday date of that ISO week as "YYYY-MM-DD".
+local function weekStrToMondayDate(week_str)
+    if not week_str then return nil end
+    local year, week = parseWeekYear(week_str)
+    if not year or not week then return nil end
+    -- Jan 4 is always in week 1; find Monday of week 1, then offset.
+    local jan4 = os.time({ year = year, month = 1, day = 4 })
+    local dow4 = tonumber(os.date("%w", jan4))  -- 0=Sun
+    if dow4 == 0 then dow4 = 7 end
+    local week1_mon = jan4 - (dow4 - 1) * 86400
+    local target_mon = week1_mon + (week - 1) * 7 * 86400
+    return os.date("%Y-%m-%d", target_mon)
+end
+
+-- Show an InfoMessage with the period start/end dates for a streak.
+-- dates table: { start = "YYYY-MM-DD" or "YYYY-WW", end_ = same }, is_weekly = bool
+local function showStreakDatePopup(dates, is_weekly)
+    if not dates then
+        UIManager:show(InfoMessage:new{ text = "–" })
+        return
+    end
+    local start_str, end_str
+    if is_weekly then
+        -- entries_desc: dates.start = latest week, dates.end_ = earliest week
+        local mon_from = weekStrToMondayDate(dates.end_)   -- earliest week → Monday
+        local mon_to   = weekStrToMondayDate(dates.start)  -- latest week → Sunday
+        local sun_to
+        if mon_to then
+            sun_to = os.date("%Y-%m-%d", os.time({ year = tonumber(mon_to:sub(1,4)),
+                month = tonumber(mon_to:sub(6,7)), day = tonumber(mon_to:sub(9,10)) }) + 6 * 86400)
+        end
+        start_str = formatDateForDisplay(mon_from)
+        end_str   = formatDateForDisplay(sun_to or mon_to)
+    else
+        -- entries_desc: dates.start = latest date, dates.end_ = earliest date
+        start_str = formatDateForDisplay(dates.end_)
+        end_str   = formatDateForDisplay(dates.start)
+    end
+    local msg = start_str .. " – " .. end_str
+    UIManager:show(InfoMessage:new{ text = msg })
+end
+
 local function buildInsightsSections(popup_self, streaks, yearly_stats, year_range, monthly_data, all_time_stats, last_week_stats, last_week_daily, fonts, layout)
     local sections = VerticalGroup:new{ align = "left" }
 
@@ -1117,10 +1220,31 @@ local function buildInsightsSections(popup_self, streaks, yearly_stats, year_ran
     local bw_val, bw_unit = streakDisplay(streaks.best_weeks,
         function(n) return N_("week in a row", "weeks in a row", n) end, _("No weekly streak"))
 
-    -- Two-column streak header.
+    -- Two-column streak header (tappable: shows date range for that streak).
     local streak_header_left  = buildSectionHeader(fonts.section, _("CURRENT STREAK"), layout.col_width, 0)
     local streak_header_right = buildSectionHeader(fonts.section, _("BEST STREAK"),    layout.col_width, 0)
     local sep_h = streak_header_left:getSize().h
+
+    local tap_current_header = InputContainer:new{
+        dimen = Geom:new{ x=0, y=0, w=layout.col_width, h=streak_header_left:getSize().h },
+        streak_header_left,
+    }
+    tap_current_header.ges_events = { Tap = { GestureRange:new{ ges="tap", range=tap_current_header.dimen } } }
+    function tap_current_header:onTap()
+        showStreakDatePopup(streaks.current_days_dates, false)
+        return true
+    end
+
+    local tap_best_header = InputContainer:new{
+        dimen = Geom:new{ x=0, y=0, w=layout.col_width, h=streak_header_right:getSize().h },
+        streak_header_right,
+    }
+    tap_best_header.ges_events = { Tap = { GestureRange:new{ ges="tap", range=tap_best_header.dimen } } }
+    function tap_best_header:onTap()
+        showStreakDatePopup(streaks.best_days_dates, false)
+        return true
+    end
+
     local streak_combined_header = FrameContainer:new{
         background = Blitbuffer.COLOR_WHITE,
         bordersize = 0,
@@ -1128,21 +1252,47 @@ local function buildInsightsSections(popup_self, streaks, yearly_stats, year_ran
         HorizontalGroup:new{
             align = "center",
             HorizontalSpan:new{ width = layout.padding_h },
-            fixedCol(streak_header_left,  layout.col_width),
+            fixedCol(tap_current_header, layout.col_width),
             buildColumnSeparator(layout.column_gap, sep_h),
-            fixedCol(streak_header_right, layout.col_width),
+            fixedCol(tap_best_header,    layout.col_width),
         },
     }
 
-    local days_row = buildTwoColRow(
-        buildValueLine(fonts.value, fonts.label, layout.col_width, cd_val, cd_unit),
-        buildValueLine(fonts.value, fonts.label, layout.col_width, bd_val, bd_unit),
-        layout)
+    -- Days row: tappable cells show date range
+    local cd_line = buildValueLine(fonts.value, fonts.label, layout.col_width, cd_val, cd_unit)
+    local bd_line = buildValueLine(fonts.value, fonts.label, layout.col_width, bd_val, bd_unit)
 
-    local weeks_row = buildTwoColRow(
-        buildValueLine(fonts.value, fonts.label, layout.col_width, cw_val, cw_unit),
-        buildValueLine(fonts.value, fonts.label, layout.col_width, bw_val, bw_unit),
-        layout)
+    local tap_cd = InputContainer:new{
+        dimen = Geom:new{ x=0, y=0, w=layout.col_width, h=cd_line:getSize().h }, cd_line,
+    }
+    tap_cd.ges_events = { Tap = { GestureRange:new{ ges="tap", range=tap_cd.dimen } } }
+    function tap_cd:onTap() showStreakDatePopup(streaks.current_days_dates, false) return true end
+
+    local tap_bd = InputContainer:new{
+        dimen = Geom:new{ x=0, y=0, w=layout.col_width, h=bd_line:getSize().h }, bd_line,
+    }
+    tap_bd.ges_events = { Tap = { GestureRange:new{ ges="tap", range=tap_bd.dimen } } }
+    function tap_bd:onTap() showStreakDatePopup(streaks.best_days_dates, false) return true end
+
+    local days_row = buildTwoColRow(tap_cd, tap_bd, layout)
+
+    -- Weeks row: tappable cells show date range
+    local cw_line = buildValueLine(fonts.value, fonts.label, layout.col_width, cw_val, cw_unit)
+    local bw_line = buildValueLine(fonts.value, fonts.label, layout.col_width, bw_val, bw_unit)
+
+    local tap_cw = InputContainer:new{
+        dimen = Geom:new{ x=0, y=0, w=layout.col_width, h=cw_line:getSize().h }, cw_line,
+    }
+    tap_cw.ges_events = { Tap = { GestureRange:new{ ges="tap", range=tap_cw.dimen } } }
+    function tap_cw:onTap() showStreakDatePopup(streaks.current_weeks_dates, true) return true end
+
+    local tap_bw = InputContainer:new{
+        dimen = Geom:new{ x=0, y=0, w=layout.col_width, h=bw_line:getSize().h }, bw_line,
+    }
+    tap_bw.ges_events = { Tap = { GestureRange:new{ ges="tap", range=tap_bw.dimen } } }
+    function tap_bw:onTap() showStreakDatePopup(streaks.best_weeks_dates, true) return true end
+
+    local weeks_row = buildTwoColRow(tap_cw, tap_bw, layout)
 
     local streak_rows = VerticalGroup:new{
         align = "left",
@@ -1296,8 +1446,9 @@ function ReadingInsightsPopup:calculateStreaks()
             return curr_date == expected_prev
         end
 
-        streaks.current_days, streaks.best_days =
-            computeStreaks(dates, isConsecutiveDay, isCurrentDayStart)
+        streaks.current_days, streaks.best_days,
+        streaks.current_days_dates, streaks.best_days_dates =
+            computeStreaksWithDates(dates, isConsecutiveDay, isCurrentDayStart)
 
         local weeks    = {}
         local sql_weeks = "SELECT DISTINCT strftime('%Y-%W', start_time, 'unixepoch', 'localtime') as w FROM page_stat ORDER BY w DESC"
@@ -1321,8 +1472,9 @@ function ReadingInsightsPopup:calculateStreaks()
             return false
         end
 
-        streaks.current_weeks, streaks.best_weeks =
-            computeStreaks(weeks, isConsecutiveWeek, isCurrentWeekStart)
+        streaks.current_weeks, streaks.best_weeks,
+        streaks.current_weeks_dates, streaks.best_weeks_dates =
+            computeStreaksWithDates(weeks, isConsecutiveWeek, isCurrentWeekStart)
 
         return streaks
     end)
