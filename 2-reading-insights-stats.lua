@@ -1,6 +1,6 @@
 --[[
 Reading Insights Popup
-Version 1.1.7
+Version 1.1.8
 Based on: https://github.com/quanganhdo/koreader-user-patches/blob/main/2-reading-insights-popup.lua
 
 Full-screen scrollable popup showing reading history from statistics.sqlite3.
@@ -18,13 +18,9 @@ Gestures:
   - Tap on Streak                      show the streak period date
   - Long press title bar               force-reload all data from DB
   - Long press monthly chart header    open CalendarView for the current month
-  - Long press current month           open CalendarView for the current month  
   - Swipe left/right                   change year
   - Swipe down / any key               close
   - Tap on book list element           show book stats
-  - Long press LAST WEEK header        show reading progress
-  - Long press today's bar             show today's timeline  
-  - Long press TOTAL READ              show time range 
 
 Caching:
   Streaks cached per minute; year range cached per day; last-week stats per minute;
@@ -71,7 +67,6 @@ local Screen = Device.screen
 local gettext = require("gettext")
 local T = require("ffi/util").template
 local util = require("util")
-local Event = require("ui/event")
 
 -- true: cache DB results (streaks/year_range per day, last-week per minute, yearly/monthly per day).
 -- false: always query DB fresh on open.
@@ -965,10 +960,9 @@ local function buildMonthlyChart(popup_self, monthly_data, layout, fonts)
                 popup_self:showBooksForMonth(month_data.month, month_year_label)
                 return true
             end
+
             table.insert(bars_row, tappable_bar)
-            if is_current then
-                popup_self._current_month_bar_widget = tappable_bar
-            end
+
             local month_label_widget = TextWidget:new{ text = m.label, face = font_small }
             table.insert(month_labels_row, CenterContainer:new{
                 dimen = Geom:new{ w = bar_width, h = month_label_widget:getSize().h },
@@ -1080,16 +1074,7 @@ local function buildWeeklyChart(popup_self, daily_data, layout, fonts)
             bar_column,
         }
 
-        if i == 1 then
-            local tappable_today = InputContainer:new{
-                dimen = Geom:new{ x=0, y=0, w=bar_width, h=total_bar_height },
-                bar_container,
-            }
-            popup_self._today_bar_widget = tappable_today
-            table.insert(bars_row, tappable_today)
-        else
-            table.insert(bars_row, bar_container)
-        end
+        table.insert(bars_row, bar_container)
 
         local day_label_widget = TextWidget:new{ text = d.label, face = font_small }
         table.insert(day_labels_row, CenterContainer:new{
@@ -1217,14 +1202,8 @@ local function buildInsightsSections(popup_self, streaks, yearly_stats, year_ran
                 table.insert(last_week_content, padded(layout.padding_h, weekly_chart))
             end
 
-            local last_week_header = buildSectionHeader(fonts.section, _("LAST WEEK"), layout.full_width)
-            local tappable_lw_header = InputContainer:new{
-                dimen = Geom:new{ x=0, y=0, w=last_week_header:getSize().w, h=last_week_header:getSize().h },
-                last_week_header,
-            }
-            popup_self._last_week_header_widget = tappable_lw_header
             addSectionWithRow(sections,
-                tappable_lw_header,
+                buildSectionHeader(fonts.section, _("LAST WEEK"), layout.full_width),
                 last_week_content, layout, { pad_row = false })
         end
     end
@@ -1410,14 +1389,8 @@ local function buildInsightsSections(popup_self, streaks, yearly_stats, year_ran
         local all_book_count = all_time_stats and all_time_stats.book_count or 0
         local header_text = _("TOTAL READ")
 
-        local total_read_header = buildSectionHeader(fonts.section, header_text, layout.full_width)
-        local tappable_total_read_header = InputContainer:new{
-            dimen = Geom:new{ x = 0, y = 0, w = total_read_header:getSize().w, h = total_read_header:getSize().h },
-            total_read_header,
-        }
-        popup_self._total_read_header_widget = tappable_total_read_header
         addSectionWithRow(sections,
-            tappable_total_read_header,
+            buildSectionHeader(fonts.section, header_text, layout.full_width),
             all_time_row, layout, { no_bottom_line = true })
     end
 
@@ -2071,16 +2044,65 @@ function ReadingInsightsPopup:openCalendarForMonth(year_month)
         return
     end
 
-    local stats_plugin = self.ui and self.ui.statistics or nil
-    self:_closeAndDispatch(function()
+    -- Save state so the popup can be recreated after CalendarView closes.
+    local saved_year             = self.selected_year
+    local saved_mode             = self.mode
+    local saved_ui               = self.ui
+    local saved_streaks          = self._streaks
+    local saved_yr               = self._year_range
+    local saved_yearly           = self._yearly
+    local saved_monthly          = self._monthly
+    local saved_all_time         = self._all_time
+    local saved_last_week        = self._last_week
+    local saved_last_week_daily  = self._last_week_daily
+
+    self._closed = true
+    UIManager:close(self)
+
+    -- Wait one frame so the popup is fully closed before opening CalendarView.
+    UIManager:scheduleIn(0, function()
+        local stats_plugin = saved_ui and saved_ui.statistics or nil
+
+        local function reopen_popup()
+            local p = ReadingInsightsPopup:new{
+                ui               = saved_ui,
+                selected_year    = saved_year,
+                mode             = saved_mode,
+                _streaks         = saved_streaks,
+                _year_range      = saved_yr,
+                _yearly          = saved_yearly,
+                _monthly         = saved_monthly,
+                _all_time        = saved_all_time,
+                _last_week       = saved_last_week,
+                _last_week_daily = saved_last_week_daily,
+            }
+            UIManager:show(p)
+        end
+
+        local reopened = false
+        local function reopen_once()
+            if reopened then return end
+            reopened = true
+            UIManager:scheduleIn(0, reopen_popup)
+        end
+
         local cv
         cv = CalendarView:new{
             reader_statistics = stats_plugin,
             shown_year        = year,
             shown_month       = month,
+            close_callback    = function()
+
+                reopen_once()
+            end,
         }
+        -- onCloseWidget fires on all dismiss paths; the flag prevents double-open.
+        local orig_onCloseWidget = cv.onCloseWidget
+        cv.onCloseWidget = function(self_cv, ...)
+            if orig_onCloseWidget then orig_onCloseWidget(self_cv, ...) end
+            reopen_once()
+        end
         UIManager:show(cv)
-        return cv
     end)
 end
 
@@ -2088,40 +2110,6 @@ end
 function ReadingInsightsPopup:openCalendarForCurrentMonth()
     local year_month = os.date("%Y-%m")
     self:openCalendarForMonth(year_month)
-end
-
-function ReadingInsightsPopup:_closeAndDispatch(fn)
-    local saved = {
-        ui               = self.ui,
-        selected_year    = self.selected_year,
-        mode             = self.mode,
-        _streaks         = self._streaks,
-        _year_range      = self._year_range,
-        _yearly          = self._yearly,
-        _monthly         = self._monthly,
-        _all_time        = self._all_time,
-        _last_week       = self._last_week,
-        _last_week_daily = self._last_week_daily,
-    }
-    self._closed = true
-    UIManager:close(self)
-
-    UIManager:scheduleIn(0, function()
-        local target = fn()
-        if target then
-            local orig = target.onCloseWidget
-            local reopened = false
-            target.onCloseWidget = function(self_t, ...)
-                if orig then orig(self_t, ...) end
-                if not reopened then
-                    reopened = true
-                    UIManager:scheduleIn(0, function()
-                        UIManager:show(ReadingInsightsPopup:new(saved))
-                    end)
-                end
-            end
-        end
-    end)
 end
 
 function ReadingInsightsPopup:getBooksForYear(year)
@@ -2404,65 +2392,6 @@ function ReadingInsightsPopup:onHold(arg, ges_ev)
         if d and pos.x >= d.x and pos.x <= d.x + d.w
               and pos.y >= d.y and pos.y <= d.y + d.h then
             self:openCalendarForCurrentMonth()
-            return true
-        end
-    end
-    
-    if self._last_week_header_widget then
-        local d = self._last_week_header_widget.dimen
-        if d and pos.x >= d.x and pos.x <= d.x + d.w
-              and pos.y >= d.y and pos.y <= d.y + d.h then
-            local saved_ui = self.ui
-            self:_closeAndDispatch(function()
-                local rp
-                saved_ui:handleEvent(Event:new("ShowReaderProgress"))
-                -- ReaderProgress is shown by the event handler synchronously;
-                -- grab it from the stack via UIManager._window_stack
-                local stack = UIManager._window_stack
-                rp = stack and stack[#stack] and stack[#stack].widget
-                return rp
-            end)
-            return true
-        end
-    end
-
-    if self._today_bar_widget then
-        local d = self._today_bar_widget.dimen
-        if d and pos.x >= d.x and pos.x <= d.x + d.w
-              and pos.y >= d.y and pos.y <= d.y + d.h then
-            local saved_ui = self.ui
-            self:_closeAndDispatch(function()
-                local cv
-                saved_ui:handleEvent(Event:new("ShowCalendarDayView"))
-                local stack = UIManager._window_stack
-                cv = stack and stack[#stack] and stack[#stack].widget
-                return cv
-            end)
-            return true
-        end
-    end
-    
-    if self._current_month_bar_widget then
-        local d = self._current_month_bar_widget.dimen
-        if d and pos.x >= d.x and pos.x <= d.x + d.w
-              and pos.y >= d.y and pos.y <= d.y + d.h then
-            self:openCalendarForCurrentMonth()
-            return true
-        end
-    end
-
-    if self._total_read_header_widget then
-        local d = self._total_read_header_widget.dimen
-        if d and pos.x >= d.x and pos.x <= d.x + d.w
-              and pos.y >= d.y and pos.y <= d.y + d.h then
-            local saved_ui = self.ui
-            self:_closeAndDispatch(function()
-                local tr
-                saved_ui:handleEvent(Event:new("ShowTimeRange"))
-                local stack = UIManager._window_stack
-                tr = stack and stack[#stack] and stack[#stack].widget
-                return tr
-            end)
             return true
         end
     end
