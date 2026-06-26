@@ -24,6 +24,7 @@ Gestures:
   - Tap on book list element           show book stats
   - Long press LAST WEEK header        show reading progress
   - Long press today's bar             show today's timeline  
+  - Long press TOTAL READ              show time range 
 
 Caching:
   Streaks cached per minute; year range cached per day; last-week stats per minute;
@@ -1409,8 +1410,14 @@ local function buildInsightsSections(popup_self, streaks, yearly_stats, year_ran
         local all_book_count = all_time_stats and all_time_stats.book_count or 0
         local header_text = _("TOTAL READ")
 
+        local total_read_header = buildSectionHeader(fonts.section, header_text, layout.full_width)
+        local tappable_total_read_header = InputContainer:new{
+            dimen = Geom:new{ x = 0, y = 0, w = total_read_header:getSize().w, h = total_read_header:getSize().h },
+            total_read_header,
+        }
+        popup_self._total_read_header_widget = tappable_total_read_header
         addSectionWithRow(sections,
-            buildSectionHeader(fonts.section, header_text, layout.full_width),
+            tappable_total_read_header,
             all_time_row, layout, { no_bottom_line = true })
     end
 
@@ -2440,6 +2447,22 @@ function ReadingInsightsPopup:onHold(arg, ges_ev)
         if d and pos.x >= d.x and pos.x <= d.x + d.w
               and pos.y >= d.y and pos.y <= d.y + d.h then
             self:openCalendarForCurrentMonth()
+            return true
+        end
+    end
+
+    if self._total_read_header_widget then
+        local d = self._total_read_header_widget.dimen
+        if d and pos.x >= d.x and pos.x <= d.x + d.w
+              and pos.y >= d.y and pos.y <= d.y + d.h then
+            local saved_ui = self.ui
+            self:_closeAndDispatch(function()
+                local tr
+                saved_ui:handleEvent(Event:new("ShowTimeRange"))
+                local stack = UIManager._window_stack
+                tr = stack and stack[#stack] and stack[#stack].widget
+                return tr
+            end)
             return true
         end
     end
