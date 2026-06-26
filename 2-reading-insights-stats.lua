@@ -1,6 +1,6 @@
 --[[
 Reading Insights Popup
-Version 1.1.5
+Version 1.1.6
 Based on: https://github.com/quanganhdo/koreader-user-patches/blob/main/2-reading-insights-popup.lua
 
 Full-screen scrollable popup showing reading history from statistics.sqlite3.
@@ -198,6 +198,7 @@ local PATCH_L10N = {
         ["Sun"] = "Sun",
         ["read time avg/day"] = "read time avg/day",
         ["reading time"] = "reading time",
+        ["No streak dates"] = "No streak dates",
     },
     hu = {
         ["Jan"] = "Jan",
@@ -268,6 +269,7 @@ local PATCH_L10N = {
         ["Sun"] = "Vas",
         ["read time avg/day"] = "átl. időtartam/nap",
         ["reading time"] = "olvasási idő",
+        ["No streak dates"] = "Nincs megjeleníthető dátum",
     },
 }
 
@@ -1112,7 +1114,7 @@ end
 -- dates table: { start = "YYYY-MM-DD" or "YYYY-WW", end_ = same }, is_weekly = bool
 local function showStreakDatePopup(dates, is_weekly)
     if not dates then
-        UIManager:show(InfoMessage:new{ text = "–" })
+        UIManager:show(InfoMessage:new{ text = _("No streak dates") })
         return
     end
     local start_str, end_str
