@@ -1,6 +1,6 @@
 --[[
 Reading Insights Popup
-Version 1.1.8
+Version 1.1.9
 Based on: https://github.com/quanganhdo/koreader-user-patches/blob/main/2-reading-insights-popup.lua
 
 Full-screen scrollable popup showing reading history from statistics.sqlite3.
@@ -8,13 +8,13 @@ Full-screen scrollable popup showing reading history from statistics.sqlite3.
 Sections:
   - Last week     7-day total and average time/pages + daily bar chart
   - Streaks       current and best daily/weekly streaks
-  - Year          time or days read + pages, navigable by year
-  - Monthly chart bar chart per month (hours or days mode, tappable)
+  - Year          time, days read, or books read + pages, navigable by year
+  - Monthly chart bar chart per month (hours, days, or books mode, tappable)
   - Total read    all-time totals
 
 Gestures:
   - Tap yearly value or monthly bar    open book list for that period
-  - Tap monthly chart header           toggle hours/days mode
+  - Tap monthly chart header           cycle hours/days/books mode
   - Tap on Streak                      show the streak period date
   - Long press title bar               force-reload all data from DB
   - Long press monthly chart header    open CalendarView for the current month
@@ -22,9 +22,15 @@ Gestures:
   - Swipe down / any key               close
   - Tap on book list element           show book stats
 
+Monthly chart modes (cycle by tapping header):
+  hours  – reading time per month (HH:MM bars)
+  days   – reading days per month
+  books  – distinct books with reading data per month (getMonthlyBookCounts)
+
 Caching:
   Streaks cached per minute; year range cached per day; last-week stats per minute;
-  yearly and monthly stats per year per day. Stale-while-revalidate:
+  yearly and monthly stats per year per day. Monthly book counts cached under
+  "books:<year>:<date>" keys, mirrored to _stale_monthly. Stale-while-revalidate:
   the popup opens immediately with cached data while fresh values load
   in the background.
 
@@ -162,6 +168,11 @@ local PATCH_L10N = {
         ["hours read"] = "hours read",
         ["day read"] = "day read",
         ["days read"] = "days read",
+        ["book read"] = "book read",
+        ["books read"] = "books read",
+        ["day/book avg"] = "day/book avg",
+        ["days/book avg"] = "days/book avg",
+        ["of days read"] = "of days read",
         ["page read"] = "page read",
         ["pages read"] = "pages read",
         ["week in a row"] = "week in a row",
@@ -174,6 +185,7 @@ local PATCH_L10N = {
         ["BEST STREAK"] = "Best streak",
         ["DAYS READ PER MONTH"] = "Days read per month",
         ["TIME READ PER MONTH"] = "Time read per month",
+        ["BOOKS READ PER MONTH"] = "Books read per month",
         ["Reading statistics: reading insights"] = "Reading statistics: reading insights",
         ["Unknown"] = "Unknown",
         ["No books read"] = "No books read",
@@ -233,6 +245,11 @@ local PATCH_L10N = {
         ["hours read"] = "olvasott óra",
         ["day read"] = "olvasással töltött nap",
         ["days read"] = "olvasással töltött nap",
+        ["book read"] = "olvasott könyv",
+        ["books read"] = "olvasott könyv",
+        ["day/book avg"] = "nap/könyv átlagosan",
+        ["days/book avg"] = "nap/könyv átlagosan",
+        ["of days read"] = "olvasással töltött nap",
         ["page read"] = "olvasott oldal",
         ["pages read"] = "olvasott oldal",
         ["week in a row"] = "egymást követő hét",
@@ -245,6 +262,7 @@ local PATCH_L10N = {
         ["BEST STREAK"] = "Leghosszabb sorozat",
         ["DAYS READ PER MONTH"] = "Havonta olvasott napok",
         ["TIME READ PER MONTH"] = "Havi olvasási idő",
+        ["BOOKS READ PER MONTH"] = "Havonta olvasott könyvek",
         ["Reading statistics: reading insights"] = "Olvasási statisztika: áttekintés",
         ["Unknown"] = "Ismeretlen",
         ["No books read"] = "Nincs olvasott könyv",
@@ -370,12 +388,15 @@ local ReadingInsightsPopup
 local INSIGHTS_MODE_KEY = "reading_insights_popup_mode"
 local INSIGHTS_MODE_DAYS = "days"
 local INSIGHTS_MODE_HOURS = "hours"
+local INSIGHTS_MODE_BOOKS = "books"
 
 local function normalizeInsightsMode(mode)
     if mode == INSIGHTS_MODE_DAYS then
         return INSIGHTS_MODE_DAYS
     end
-    -- default to hours mode
+    if mode == INSIGHTS_MODE_BOOKS then
+        return INSIGHTS_MODE_BOOKS
+    end
     return INSIGHTS_MODE_HOURS
 end
 
@@ -826,16 +847,42 @@ local function buildYearlyRow(popup_self, yearly_stats, fonts, layout)
         local yr_m = yr_total_mins % 60
         left_value = string.format("%02d:%02d", yr_h, yr_m)
         left_unit  = _("reading time")
+    elseif popup_self.mode == INSIGHTS_MODE_BOOKS then
+        left_value = formatCount(yearly_stats.books_started)
+        left_unit  = N_("book read", "books read", yearly_stats.books_started)
     else
         left_value = formatCount(yearly_stats.days)
         left_unit  = N_("day read", "days read", yearly_stats.days)
     end
     local left_line = buildValueLine(
         fonts.value, fonts.label, layout.col_width, left_value, left_unit)
+    local right_value, right_unit
+    if popup_self.mode == INSIGHTS_MODE_DAYS then
+        local selected_year = popup_self.selected_year or tonumber(os.date("%Y"))
+        local current_year  = tonumber(os.date("%Y"))
+        local days_in_year
+        if selected_year == current_year then
+            days_in_year = tonumber(os.date("%j"))
+        else
+            local is_leap = (selected_year % 4 == 0 and selected_year % 100 ~= 0)
+                         or (selected_year % 400 == 0)
+            days_in_year = is_leap and 366 or 365
+        end
+        local pct = (days_in_year > 0)
+            and math.floor((yearly_stats.days / days_in_year) * 100 + 0.5)
+            or 0
+        right_value = pct .. "%"
+        right_unit  = _("of days read")
+    elseif popup_self.mode == INSIGHTS_MODE_BOOKS then
+        local avg_days = yearly_stats.avg_days_per_book or 0
+        right_value = formatCount(avg_days)
+        right_unit  = N_("day/book avg", "days/book avg", avg_days)
+    else
+        right_value = formatCount(yearly_stats.pages)
+        right_unit  = N_("page read", "pages read", yearly_stats.pages)
+    end
     local pages_val = buildValueLine(
-        fonts.value, fonts.label, layout.col_width,
-        formatCount(yearly_stats.pages),
-        N_("page read", "pages read", yearly_stats.pages))
+        fonts.value, fonts.label, layout.col_width, right_value, right_unit)
 
     local selected_year_for_tap = popup_self.selected_year
 
@@ -878,7 +925,9 @@ end
 local function buildMonthlyChart(popup_self, monthly_data, layout, fonts)
     if #monthly_data == 0 then return nil end
 
-    local value_key = (popup_self.mode == INSIGHTS_MODE_HOURS and "hours") or "days"
+    local value_key = (popup_self.mode == INSIGHTS_MODE_HOURS and "hours")
+        or (popup_self.mode == INSIGHTS_MODE_BOOKS and "book_count")
+        or "days"
     local max_value = 1
     for _, m in ipairs(monthly_data) do
         local v = tonumber(m[value_key]) or 0
@@ -922,8 +971,7 @@ local function buildMonthlyChart(popup_self, monthly_data, layout, fonts)
                 bar_label_str = string.format("%02d:%02d", mo_h, mo_m)
             else
                 bar_label_str = formatNumber(value)
-            end
-            local value_label   = TextWidget:new{ text = bar_label_str, face = font_small }
+            end            local value_label   = TextWidget:new{ text = bar_label_str, face = font_small }
             local centered_label = CenterContainer:new{
                 dimen  = Geom:new{ w = bar_width, h = label_height },
                 value_label,
@@ -1325,6 +1373,8 @@ local function buildInsightsSections(popup_self, streaks, yearly_stats, year_ran
     if chart then
         local chart_header_text = (popup_self.mode == INSIGHTS_MODE_HOURS
             and _("TIME READ PER MONTH"))
+            or (popup_self.mode == INSIGHTS_MODE_BOOKS
+            and _("BOOKS READ PER MONTH"))
             or _("DAYS READ PER MONTH")
         chart_header_text = chart_header_text .. " \xe2\x80\xba"
         local chart_header = buildSectionHeader(fonts.section, chart_header_text, layout.full_width)
@@ -1589,7 +1639,7 @@ function ReadingInsightsPopup:getYearlyStats(year)
     local key = year .. ":v3:" .. todayDateStr()
     if ENABLE_CACHE and _yearly_cache[key] then return _yearly_cache[key] end
 
-    local stats = { days = 0, pages = 0, duration = 0, books_started = 0 }
+    local stats = { days = 0, pages = 0, duration = 0, books_started = 0, avg_days_per_book = 0 }
     local result = withStatsDb(stats, function(conn)
         local year_str = tostring(year)
         local sql = string.format([[
@@ -1618,6 +1668,12 @@ function ReadingInsightsPopup:getYearlyStats(year)
                 stats.books_started = tonumber(row[4]) or 0
             end
         end)
+
+        -- Average number of distinct reading days spent per book, rounded up.
+        if stats.books_started > 0 then
+            stats.avg_days_per_book = math.ceil(stats.days / stats.books_started)
+        end
+
         return stats
     end)
 
@@ -2112,6 +2168,47 @@ function ReadingInsightsPopup:openCalendarForCurrentMonth()
     self:openCalendarForMonth(year_month)
 end
 
+function ReadingInsightsPopup:getMonthlyBookCounts(year)
+    local key = "books:" .. year .. ":" .. todayDateStr()
+    if ENABLE_CACHE and _monthly_cache[key] then return _monthly_cache[key] end
+
+    local months = {}
+    local result = withStatsDb(months, function(conn)
+        local year_str = tostring(year)
+        local sql = string.format([[
+            SELECT strftime('%%Y-%%m', start_time, 'unixepoch', 'localtime') AS month,
+                   COUNT(DISTINCT id_book) AS book_count
+            FROM page_stat
+            WHERE strftime('%%Y', start_time, 'unixepoch', 'localtime') = '%s'
+            GROUP BY month
+            ORDER BY month ASC
+        ]], year_str)
+
+        local results = {}
+        withStatement(conn, sql, function(stmt)
+            for row in stmt:rows() do results[row[1]] = row[2] end
+        end)
+
+        for month_num = 1, 12 do
+            local year_month = string.format("%04d-%02d", year, month_num)
+            local book_count = tonumber(results[year_month]) or 0
+            table.insert(months, {
+                month      = year_month,
+                book_count = book_count,
+                label      = MONTH_NAMES_SHORT[month_num],
+                label_full = MONTH_NAMES_FULL[month_num],
+            })
+        end
+        return months
+    end)
+
+    if ENABLE_CACHE then
+        _monthly_cache[key] = result
+        _stale_monthly[key] = result
+    end
+    return result
+end
+
 function ReadingInsightsPopup:getBooksForYear(year)
     return getBooksForPeriod("%Y", tostring(year))
 end
@@ -2216,6 +2313,8 @@ function ReadingInsightsPopup:_loadAndRebuild()
     local new_monthly
     if self.mode == INSIGHTS_MODE_HOURS then
         new_monthly = self:getMonthlyReadingHours(self.selected_year)
+    elseif self.mode == INSIGHTS_MODE_BOOKS then
+        new_monthly = self:getMonthlyBookCounts(self.selected_year)
     else
         new_monthly = self:getMonthlyReadingDays(self.selected_year)
     end
@@ -2261,7 +2360,7 @@ function ReadingInsightsPopup:init()
         self._yearly  = self._yearly  or _yearly_cache[year_key]
         local mode = normalizeInsightsMode(self.mode or readInsightsMode())
         local month_key_prefix = (mode == INSIGHTS_MODE_HOURS and "hours:" or
-                                  "days:")
+                                  mode == INSIGHTS_MODE_BOOKS and "books:" or "days:")
         local month_key = month_key_prefix .. (self.selected_year or tonumber(os.date("%Y"))) .. ":" .. todayDateStr()
         self._monthly = self._monthly or _monthly_cache[month_key]
         if not self._last_week or not self._last_week_daily then
@@ -2277,7 +2376,7 @@ function ReadingInsightsPopup:init()
         local year_key_any   = (self.selected_year or tonumber(os.date("%Y"))) .. ":v3:"
         local mode_fb = normalizeInsightsMode(self.mode or readInsightsMode())
         local month_key_prefix_fb = (mode_fb == INSIGHTS_MODE_HOURS and "hours:" or
-                                     "days:")
+                                     mode_fb == INSIGHTS_MODE_BOOKS and "books:" or "days:")
         local month_key_fb = month_key_prefix_fb .. (self.selected_year or tonumber(os.date("%Y"))) .. ":"
 
         if not self._streaks then
@@ -2400,11 +2499,18 @@ function ReadingInsightsPopup:onHold(arg, ges_ev)
 end
 
 function ReadingInsightsPopup:toggleInsightsMode()
-    local new_mode = self.mode == INSIGHTS_MODE_HOURS and INSIGHTS_MODE_DAYS or INSIGHTS_MODE_HOURS
+    local new_mode
+    if self.mode == INSIGHTS_MODE_HOURS then
+        new_mode = INSIGHTS_MODE_DAYS
+    elseif self.mode == INSIGHTS_MODE_DAYS then
+        new_mode = INSIGHTS_MODE_BOOKS
+    else
+        new_mode = INSIGHTS_MODE_HOURS
+    end
     saveInsightsMode(new_mode)
     self.mode     = new_mode
-    -- Try to serve stale monthly data for the new mode before the background fetch.
-    local month_key_prefix_new = (new_mode == INSIGHTS_MODE_HOURS and "hours:" or "days:")
+    local month_key_prefix_new = (new_mode == INSIGHTS_MODE_HOURS and "hours:" or
+                                  new_mode == INSIGHTS_MODE_BOOKS and "books:" or "days:")
     local month_key_fb = month_key_prefix_new .. (self.selected_year or tonumber(os.date("%Y"))) .. ":"
     self._monthly = nil
     if ENABLE_CACHE then
@@ -2430,6 +2536,8 @@ function ReadingInsightsPopup:cycleInsightsMode()
     local new_mode
     if self.mode == INSIGHTS_MODE_HOURS then
         new_mode = INSIGHTS_MODE_DAYS
+    elseif self.mode == INSIGHTS_MODE_DAYS then
+        new_mode = INSIGHTS_MODE_BOOKS
     else
         new_mode = INSIGHTS_MODE_HOURS
     end
@@ -2437,8 +2545,8 @@ function ReadingInsightsPopup:cycleInsightsMode()
     saveInsightsMode(new_mode)
     self.mode = new_mode
 
-    -- Try to serve stale monthly data for the new mode before the background fetch.
-    local month_key_prefix_new = (new_mode == INSIGHTS_MODE_HOURS and "hours:" or "days:")
+    local month_key_prefix_new = (new_mode == INSIGHTS_MODE_HOURS and "hours:" or
+                                  new_mode == INSIGHTS_MODE_BOOKS and "books:" or "days:")
     local month_key_fb = month_key_prefix_new .. (self.selected_year or tonumber(os.date("%Y"))) .. ":"
     self._monthly = nil
     if ENABLE_CACHE then
@@ -2469,7 +2577,8 @@ function ReadingInsightsPopup:onGoToPrevYear()
         -- Serve stale data for the target year immediately.
         local year_key_any   = self.selected_year .. ":v3:"
         local mode_fb = self.mode or INSIGHTS_MODE_HOURS
-        local month_key_prefix_fb = (mode_fb == INSIGHTS_MODE_HOURS and "hours:" or "days:")
+        local month_key_prefix_fb = (mode_fb == INSIGHTS_MODE_HOURS and "hours:" or
+                                     mode_fb == INSIGHTS_MODE_BOOKS and "books:" or "days:")
         local month_key_fb = month_key_prefix_fb .. self.selected_year .. ":"
         if ENABLE_CACHE then
             for k, v in pairs(_stale_yearly) do
@@ -2514,7 +2623,8 @@ function ReadingInsightsPopup:onGoToNextYear()
         -- Serve stale data for the target year immediately.
         local year_key_any   = self.selected_year .. ":v3:"
         local mode_fb = self.mode or INSIGHTS_MODE_HOURS
-        local month_key_prefix_fb = (mode_fb == INSIGHTS_MODE_HOURS and "hours:" or "days:")
+        local month_key_prefix_fb = (mode_fb == INSIGHTS_MODE_HOURS and "hours:" or
+                                     mode_fb == INSIGHTS_MODE_BOOKS and "books:" or "days:")
         local month_key_fb = month_key_prefix_fb .. self.selected_year .. ":"
         if ENABLE_CACHE then
             for k, v in pairs(_stale_yearly) do
