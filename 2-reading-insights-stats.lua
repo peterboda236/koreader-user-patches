@@ -1,6 +1,6 @@
 --[[
 Reading Insights Popup
-Version 1.1.9
+Version 1.1.9.1
 Based on: https://github.com/quanganhdo/koreader-user-patches/blob/main/2-reading-insights-popup.lua
 
 Full-screen scrollable popup showing reading history from statistics.sqlite3.
@@ -247,9 +247,9 @@ local PATCH_L10N = {
         ["days read"] = "olvasással töltött nap",
         ["book read"] = "olvasott könyv",
         ["books read"] = "olvasott könyv",
-        ["day/book avg"] = "nap/könyv átlagosan",
-        ["days/book avg"] = "nap/könyv átlagosan",
-        ["of days read"] = "olvasással töltött nap",
+        ["day/book avg"] = "átlag nap/könyv",
+        ["days/book avg"] = "átlag nap/könyv",
+        ["of days read"] = "olvasott nap",
         ["page read"] = "olvasott oldal",
         ["pages read"] = "olvasott oldal",
         ["week in a row"] = "egymást követő hét",
