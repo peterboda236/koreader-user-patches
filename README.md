@@ -55,6 +55,28 @@ A compact overlay displayed while reading, showing live statistics for the curre
 
 ---
 
+
+### 📑 TOC Reading Time
+
+**`2-toc-reading-time.lua`**
+
+<img width="384" height="512" alt="IMG_1920" src="https://github.com/user-attachments/assets/44ac91eb-dfbe-41cc-a26e-f4df06ffd3df" />
+
+
+Enriches the table of contents with an estimated reading time for each chapter, displayed alongside the existing page count.
+
+1. Chapter  (41) ........................ 8
+
+becomes:
+
+1. Chapter  (41 | 00:44) ........................ 8
+
+Falls back to the original format if the Statistics plugin has no speed data yet (e.g. at the very start of a book).
+
+Requirements: the Statistics plugin must be active and "Show chapter length" must be enabled in the TOC settings.
+
+---
+
 ## Installation
 
 Place the `.lua` files into KOReader's `patches` folder on your device:
