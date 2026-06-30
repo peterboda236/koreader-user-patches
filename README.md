@@ -9,7 +9,8 @@ A collection of user patches for [KOReader](https://github.com/koreader/koreader
 ### 🌙 Frontlight Widget — Night Mode Toggle
 **`2-frontlight-widget-nightmode.lua`**
 
-<img width="384" height="512" alt="kép" src="https://github.com/user-attachments/assets/2401c194-0ae3-4c6e-8b7f-1c7c79f9a10d" />
+<img width="384" height="512" alt="FileManager_2026-06-30_074755" src="https://github.com/user-attachments/assets/8ef06f58-e241-42ca-b4c4-a196b02f662b" />
+
 
 Adds a **Night Mode** toggle button directly to the bottom of the built-in frontlight widget. Toggle inverts the screen and persists the setting — no need to dig through menus.
 
@@ -18,7 +19,7 @@ Adds a **Night Mode** toggle button directly to the bottom of the built-in front
 ### 📊 Reading Insights
 **`2-reading-insights-stats.lua`**
 
-<img width="384" height="512" alt="kép" src="https://github.com/user-attachments/assets/c0669dbe-5e8e-4b40-a3c7-5299036e477b" />
+<img width="384" height="512" alt="FileManager_2026-06-30_074746" src="https://github.com/user-attachments/assets/cf248698-75d0-4948-8d9c-70ea5c69fd5e" />
 
 A full-screen scrollable overlay with a comprehensive overview of your reading history, powered by KOReader's statistics database.
 
@@ -60,8 +61,7 @@ A compact overlay displayed while reading, showing live statistics for the curre
 
 **`2-toc-reading-time.lua`**
 
-<img width="384" height="512" alt="IMG_1920" src="https://github.com/user-attachments/assets/44ac91eb-dfbe-41cc-a26e-f4df06ffd3df" />
-
+<img width="384" height="512" alt="Reader_Az Elso Torveny vilaga 1  - Hidegen talalva - Abercrombie, Joe #p(878) epub_p456_2026-06-30_074806" src="https://github.com/user-attachments/assets/fca94799-7197-4f54-a3ef-e3d1ddc6a722" />
 
 Enriches the table of contents with an estimated reading time for each chapter, displayed alongside the existing page count.
 
