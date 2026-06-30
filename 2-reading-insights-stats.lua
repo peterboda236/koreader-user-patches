@@ -1,12 +1,13 @@
 --[[
 Reading Insights Popup
-Version 1.1.9.2
+Version 1.2
 Based on: https://github.com/quanganhdo/koreader-user-patches/blob/main/2-reading-insights-popup.lua
 
 Full-screen scrollable popup showing reading history from statistics.sqlite3.
 
 Sections:
   - Last week     7-day total and average time/pages + daily bar chart
+                  (tap a value to see an 8-week trend popup)
   - Streaks       current and best daily/weekly streaks
   - Year          time, days read, or books read + pages, navigable by year
   - Monthly chart bar chart per month (hours, days, or books mode, tappable)
@@ -21,6 +22,7 @@ Gestures:
   - Swipe left/right                   change year
   - Swipe down / any key               close
   - Tap on book list element           show book stats
+  - Tap value in Last week section     show 8-week trend popup (line chart)
 
 Monthly chart modes (cycle by tapping header):
   hours  – reading time per month (HH:MM bars)
@@ -95,6 +97,8 @@ local _cache = {
     last_week_minute = nil,
     last_week_daily        = nil,
     last_week_daily_minute = nil,
+    last8weeks        = nil,
+    last8weeks_minute = nil,
 }
 
 local _yearly_cache  = {}
@@ -117,6 +121,8 @@ local function clearAllCache()
     _cache.last_week_minute = nil
     _cache.last_week_daily        = nil
     _cache.last_week_daily_minute = nil
+    _cache.last8weeks        = nil
+    _cache.last8weeks_minute = nil
     _yearly_cache          = {}
     _monthly_cache         = {}
     -- Stale cache is wiped on force-reload so stale data is not shown after a manual refresh.
@@ -211,20 +217,26 @@ local PATCH_L10N = {
         ["read time avg/day"] = "read time avg/day",
         ["reading time"] = "reading time",
         ["No streak dates"] = "No streak dates",
+        ["CalendarView not available"] = "CalendarView not available",
+        ["Reading time over the last 8 weeks"] = "Reading time over the last 8 weeks",
+        ["Pages read over the last 8 weeks"] = "Pages read over the last 8 weeks",
+        ["Average daily reading time, last 8 weeks"] = "Average daily reading time, last 8 weeks",
+        ["Average daily pages, last 8 weeks"] = "Average daily pages, last 8 weeks",
+        ["No reading data in the last 8 weeks"] = "No reading data in the last 8 weeks",
     },
     hu = {
-        ["Jan"] = "Jan",
-        ["Feb"] = "Febr",
-        ["Mar"] = "Márc",
-        ["Apr"] = "Ápr",
-        ["May"] = "Máj",
-        ["Jun"] = "Jún",
-        ["Jul"] = "Júl",
-        ["Aug"] = "Aug",
-        ["Sep"] = "Szept",
-        ["Oct"] = "Okt",
-        ["Nov"] = "Nov",
-        ["Dec"] = "Dec",
+        ["Jan"] = "Jan.",
+        ["Feb"] = "Febr.",
+        ["Mar"] = "Márc.",
+        ["Apr"] = "Ápr.",
+        ["May"] = "Máj.",
+        ["Jun"] = "Jún.",
+        ["Jul"] = "Júl.",
+        ["Aug"] = "Aug.",
+        ["Sep"] = "Szept.",
+        ["Oct"] = "Okt.",
+        ["Nov"] = "Nov.",
+        ["Dec"] = "Dec.",
         ["January"] = "Január",
         ["February"] = "Február",
         ["March"] = "Március",
@@ -278,16 +290,22 @@ local PATCH_L10N = {
         ["avg/day"] = "átlag oldal/nap",
         ["Today"] = "Ma",
         ["Yesterday"] = "Tegnap",
-        ["Mon"] = "Hét",
+        ["Mon"] = "Hét.",
         ["Tue"] = "Kedd",
-        ["Wed"] = "Sze",
-        ["Thu"] = "Csüt",
-        ["Fri"] = "Pén",
-        ["Sat"] = "Szo",
-        ["Sun"] = "Vas",
+        ["Wed"] = "Sze.",
+        ["Thu"] = "Csüt.",
+        ["Fri"] = "Pén.",
+        ["Sat"] = "Szo.",
+        ["Sun"] = "Vas.",
         ["read time avg/day"] = "átlag idő/nap",
         ["reading time"] = "olvasási idő",
         ["No streak dates"] = "Nincs megjeleníthető dátum",
+        ["CalendarView not available"] = "CalendarView nem elérhető",
+        ["Reading time over the last 8 weeks"] = "Elmúlt 8 hét olvasási ideje",
+        ["Pages read over the last 8 weeks"] = "Elmúlt 8 hét olvasott oldalainak száma",
+        ["Average daily reading time, last 8 weeks"] = "Elmúlt 8 hét átlagos napi olvasási ideje",
+        ["Average daily pages, last 8 weeks"] = "Elmúlt 8 hét átlagos napi oldalszáma",
+        ["No reading data in the last 8 weeks"] = "Nincs olvasási adat az elmúlt 8 héten",
     },
 }
 
@@ -719,6 +737,21 @@ local function buildTwoColRow(left_widget, right_widget, layout)
     }
 end
 
+local function tappableCell(widget, col_width, callback)
+    local cell = InputContainer:new{
+        dimen = Geom:new{ x = 0, y = 0, w = col_width, h = widget:getSize().h },
+        widget,
+    }
+    cell.ges_events = {
+        Tap = { GestureRange:new{ ges = "tap", range = cell.dimen } },
+    }
+    function cell:onTap()
+        callback()
+        return true
+    end
+    return cell
+end
+
 local function addSectionWithRow(sections, header_widget, row, layout, opts)
     local pad_row        = true
     local add_divider    = true
@@ -1050,6 +1083,256 @@ local function buildMonthlyChart(popup_self, monthly_data, layout, fonts)
     return chart
 end
 
+-- ============================================================
+-- 8-week reading trend popup (tap a Last-week cell to open it)
+-- ============================================================
+
+-- Minimal line-chart widget: draws straight segments between `points`
+-- ({x, y} pixel pairs, relative to the widget's own top-left corner)
+-- using only bb:paintRect, so it doesn't depend on any diagonal-line
+-- drawing primitive that may or may not exist in a given KOReader build.
+local LineChartWidget = Widget:extend{
+    width      = nil,
+    height     = nil,
+    points     = nil,
+    line_color = nil,
+}
+
+function LineChartWidget:getSize()
+    return Geom:new{ w = self.width, h = self.height }
+end
+
+function LineChartWidget:paintTo(bb, x, y)
+    if not self.points or #self.points == 0 then return end
+    local color = self.line_color or Blitbuffer.COLOR_BLACK
+
+    if #self.points > 1 then
+        for i = 1, #self.points - 1 do
+            local p1, p2 = self.points[i], self.points[i + 1]
+            local dx, dy = p2.x - p1.x, p2.y - p1.y
+            local steps  = math.max(math.abs(dx), math.abs(dy), 1)
+            for s = 0, steps do
+                local t  = s / steps
+                local px = math.floor(p1.x + dx * t + 0.5)
+                local py = math.floor(p1.y + dy * t + 0.5)
+                bb:paintRect(x + px, y + py, 2, 2, color)
+            end
+        end
+    end
+end
+
+-- Same rounding rule used for the "avg/day" pages cell in the main popup:
+-- integer above 10, 1 decimal place below.
+local function roundAvgPages(value)
+    if value >= 10 then
+        return math.floor(value + 0.5)
+    else
+        return math.floor(value * 10 + 0.5) / 10
+    end
+end
+
+-- Format a single week's bucket value for the given metric.
+-- Returns (display_string, raw_numeric_value).
+local function formatWeekValue(metric, week_entry)
+    if metric == "time_total" or metric == "time_avg" then
+        local secs = week_entry.seconds or 0
+        if metric == "time_avg" then secs = secs / 7 end
+        local mins = math.floor(secs / 60 + 0.5)
+        local h = math.floor(mins / 60)
+        local m = mins % 60
+        return string.format("%02d:%02d", h, m), secs
+    else
+        local pages = week_entry.pages or 0
+        if metric == "pages_avg" then
+            pages = roundAvgPages(pages / 7)
+            return formatNumber(pages, pages ~= math.floor(pages) and 1 or 0), pages
+        end
+        return formatCount(pages), pages
+    end
+end
+
+local TREND_TITLE_KEYS = {
+    time_total  = "Reading time over the last 8 weeks",
+    pages_total = "Pages read over the last 8 weeks",
+    time_avg    = "Average daily reading time, last 8 weeks",
+    pages_avg   = "Average daily pages, last 8 weeks",
+}
+
+local function trendTitle(metric)
+    local key = TREND_TITLE_KEYS[metric]
+    return key and _(key) or ""
+end
+
+local function totalForMetric(metric, weeks)
+    local total_secs, total_pages = 0, 0
+    for _, w in ipairs(weeks) do
+        total_secs  = total_secs  + (w.seconds or 0)
+        total_pages = total_pages + (w.pages or 0)
+    end
+    if metric == "time_total" then
+        local mins = math.floor(total_secs / 60 + 0.5)
+        return string.format("%02d:%02d", math.floor(mins / 60), mins % 60)
+    elseif metric == "time_avg" then
+        local avg_secs = total_secs / (7 * #weeks)
+        local mins = math.floor(avg_secs / 60 + 0.5)
+        return string.format("%02d:%02d", math.floor(mins / 60), mins % 60)
+    elseif metric == "pages_total" then
+        return formatCount(total_pages)
+    else -- pages_avg
+        local avg = roundAvgPages(total_pages / (7 * #weeks))
+        return formatNumber(avg, avg ~= math.floor(avg) and 1 or 0)
+    end
+end
+
+-- Builds the chart: one dot per week, connected by straight segments,
+-- with the per-week value printed above each dot and a baseline below.
+-- "Máj 6" / "May 6" style label using the same month names as the monthly chart.
+local function formatShortDate(date_str)
+    local y, m, d = date_str:match("^(%d+)-(%d+)-(%d+)$")
+    if not y then return date_str end
+    local month_name = MONTH_NAMES_SHORT[tonumber(m)] or m
+    if getLangBase() == "hu" then
+        return month_name .. " " .. tostring(tonumber(d)) .. "."
+    else
+        return month_name .. " " .. tostring(tonumber(d))
+    end
+end
+
+local function buildLine8WeekChart(weeks, metric, chart_width, fonts)
+    if not weeks or #weeks == 0 then return nil end
+
+    local bar_height  = tonumber(Screen:scaleBySize(120))
+    local num_points  = #weeks
+    local col_width   = math.floor(chart_width / num_points)
+    local font_small  = fonts.small
+
+    local sample_label = TextWidget:new{ text = "0", face = font_small }
+    local label_height = sample_label:getSize().h
+    sample_label:free()
+
+    local values = {}
+    local max_value = 0
+    for i, w in ipairs(weeks) do
+        local _unused, raw = formatWeekValue(metric, w)
+        values[i] = raw
+        if raw > max_value then max_value = raw end
+    end
+    if max_value <= 0 then max_value = 1 end
+
+    local dot_size    = tonumber(Screen:scaleBySize(6))
+    local baseline_h  = Size.line.medium
+    local total_col_h = bar_height + label_height
+
+    local bars_row = HorizontalGroup:new{ align = "bottom" }
+    local points   = {}
+
+    for col = 1, num_points do
+        local i = num_points - col + 1  -- weeks[num_points] (current week) goes leftmost
+        local ratio = values[i] / max_value
+        local dot_y_from_bottom = math.floor(ratio * (bar_height - dot_size))
+        local val_str = formatWeekValue(metric, weeks[i])
+
+        local value_label    = TextWidget:new{ text = val_str, face = font_small }
+        local centered_label = CenterContainer:new{
+            dimen = Geom:new{ w = col_width, h = label_height },
+            value_label,
+        }
+
+        local col_group = VerticalGroup:new{ align = "center" }
+        table.insert(col_group, centered_label)
+        local space_above = bar_height - dot_size - dot_y_from_bottom
+        if space_above > 0 then
+            table.insert(col_group, VerticalSpan:new{ height = space_above })
+        end
+        table.insert(col_group, CenterContainer:new{
+            dimen = Geom:new{ w = col_width, h = dot_size },
+            LineWidget:new{
+                dimen      = Geom:new{ w = dot_size, h = dot_size },
+                background = Blitbuffer.COLOR_BLACK,
+            },
+        })
+        if dot_y_from_bottom > 0 then
+            table.insert(col_group, VerticalSpan:new{ height = dot_y_from_bottom })
+        end
+        table.insert(col_group, LineWidget:new{
+            dimen      = Geom:new{ w = col_width, h = baseline_h },
+            background = Blitbuffer.COLOR_GRAY,
+        })
+
+        table.insert(bars_row, BottomContainer:new{
+            dimen = Geom:new{ w = col_width, h = total_col_h },
+            col_group,
+        })
+
+        points[col] = {
+            x = (col - 1) * col_width + math.floor(col_width / 2),
+            y = label_height + space_above + math.floor(dot_size / 2),
+        }
+    end
+
+    local line_widget = LineChartWidget:new{
+        width      = num_points * col_width,
+        height     = total_col_h,
+        points     = points,
+        line_color = Blitbuffer.COLOR_BLACK,
+    }
+
+    local chart_area = OverlapGroup:new{
+        dimen = Geom:new{ w = num_points * col_width, h = total_col_h },
+        bars_row,
+        line_widget,
+    }
+
+    -- Per-week start/end date, same font size as the value labels above the dots.
+    -- Same left-to-right order as the columns above: most recent week first.
+    local date_labels_row = HorizontalGroup:new{ align = "top" }
+    for col = 1, num_points do
+        local i = num_points - col + 1
+        local start_lbl = TextWidget:new{ text = formatShortDate(weeks[i].start_date), face = font_small }
+        local col_dates  = CenterContainer:new{
+            dimen = Geom:new{ w = col_width, h = start_lbl:getSize().h },
+            start_lbl,
+        }
+        table.insert(date_labels_row, col_dates)
+    end
+
+    return VerticalGroup:new{
+        align = "center",
+        chart_area,
+        VerticalSpan:new{ height = Size.padding.small },
+        date_labels_row,
+    }
+end
+
+-- Full-screen tap-anywhere-to-close popup that hosts the trend chart.
+local WeeklyTrendPopup = InputContainer:extend{
+    modal       = true,
+    box_content = nil,
+}
+
+function WeeklyTrendPopup:init()
+    local screen_w = Screen:getWidth()
+    local screen_h = Screen:getHeight()
+    self.dimen = Geom:new{ x = 0, y = 0, w = screen_w, h = screen_h }
+
+    if Device:isTouchDevice() then
+        self.ges_events.Tap   = { GestureRange:new{ ges = "tap",   range = self.dimen } }
+        self.ges_events.Swipe = { GestureRange:new{ ges = "swipe", range = self.dimen } }
+    end
+    if Device:hasKeys() then
+        self.key_events.AnyKeyPressed = { { Device.input.group.Any } }
+    end
+
+    self[1] = CenterContainer:new{
+        dimen = self.dimen,
+        self.box_content,
+    }
+end
+
+function WeeklyTrendPopup:onTap()           UIManager:close(self) return true end
+function WeeklyTrendPopup:onSwipe()         UIManager:close(self) return true end
+function WeeklyTrendPopup:onAnyKeyPressed() UIManager:close(self) return true end
+
 -- Weekly bar chart: 7 bars, index 1 = today (leftmost), index 7 = 6 days ago.
 -- Labels: "Today", "Yesterday", then weekday abbreviations.
 local function buildWeeklyChart(popup_self, daily_data, layout, fonts)
@@ -1178,11 +1461,11 @@ local function showStreakDatePopup(dates, is_weekly)
         start_str = formatDateForDisplay(mon_from)
         end_str   = formatDateForDisplay(sun_to or mon_to)
     else
-        -- entries_desc: dates.start = latest date, dates.end_ = earliest date
-        start_str = formatDateForDisplay(dates.end_)
-        end_str   = formatDateForDisplay(dates.start)
+        -- entries_desc: dates.start = earliest date, dates.end_ = latest date
+        start_str = formatDateForDisplay(dates.start)
+        end_str   = formatDateForDisplay(dates.end_)
     end
-    local msg = start_str .. " – " .. end_str
+    local msg = start_str .. "–" .. end_str
     UIManager:show(InfoMessage:new{ text = msg })
 end
 
@@ -1218,8 +1501,12 @@ local function buildInsightsSections(popup_self, streaks, yearly_stats, year_ran
             end
 
             local week_row = buildTwoColRow(
-                buildValueLine(fonts.value, fonts.label, layout.col_width, week_time_val,   week_time_unit_full),
-                buildValueLine(fonts.value, fonts.label, layout.col_width, week_pages_val,  week_pages_unit),
+                tappableCell(
+                    buildValueLine(fonts.value, fonts.label, layout.col_width, week_time_val,   week_time_unit_full),
+                    layout.col_width, function() popup_self:showWeeklyTrendPopup("time_avg") end),
+                tappableCell(
+                    buildValueLine(fonts.value, fonts.label, layout.col_width, week_pages_val,  week_pages_unit),
+                    layout.col_width, function() popup_self:showWeeklyTrendPopup("pages_avg") end),
                 layout)
 
             local total_secs = math.floor((lw.avg_seconds or 0) * 7 + 0.5)
@@ -1234,8 +1521,12 @@ local function buildInsightsSections(popup_self, streaks, yearly_stats, year_ran
             local total_pages_unit = N_("page read", "pages read", total_pages_raw)
 
             local total_row = buildTwoColRow(
-                buildValueLine(fonts.value, fonts.label, layout.col_width, total_time_val, total_time_unit),
-                buildValueLine(fonts.value, fonts.label, layout.col_width, total_pages_val, total_pages_unit),
+                tappableCell(
+                    buildValueLine(fonts.value, fonts.label, layout.col_width, total_time_val, total_time_unit),
+                    layout.col_width, function() popup_self:showWeeklyTrendPopup("time_total") end),
+                tappableCell(
+                    buildValueLine(fonts.value, fonts.label, layout.col_width, total_pages_val, total_pages_unit),
+                    layout.col_width, function() popup_self:showWeeklyTrendPopup("pages_total") end),
                 layout)
 
             local weekly_chart = buildWeeklyChart(popup_self, last_week_daily, layout, fonts)
@@ -1873,6 +2164,137 @@ function ReadingInsightsPopup:getLastWeekAll()
     return lw_result, daily_result
 end
 
+-- Returns an array of 8 weekly buckets (index 1 = oldest of the 8 weeks,
+-- index 8 = current week), each { start_date, end_date, seconds, pages }.
+-- Mirrors the de-duplication logic used by getLastWeekAll, just over a
+-- wider 56-day window split into 7-day chunks.
+function ReadingInsightsPopup:getLast8WeeksData()
+    local minute = currentMinute()
+    if ENABLE_CACHE and _cache.last8weeks and _cache.last8weeks_minute == minute then
+        return _cache.last8weeks
+    end
+
+    local now_ts  = os.time()
+    local now_t   = os.date("*t")
+    local today_midnight = now_ts - (now_t.hour * 3600 + now_t.min * 60 + now_t.sec)
+    local period_start_ts = today_midnight - (8 * 7 - 1) * 86400
+
+    local weeks = {}
+    for w = 1, 8 do
+        local week_end_midnight   = today_midnight - (8 - w) * 7 * 86400
+        local week_start_midnight = week_end_midnight - 6 * 86400
+        weeks[w] = {
+            start_date = os.date("%Y-%m-%d", week_start_midnight),
+            end_date   = os.date("%Y-%m-%d", week_end_midnight),
+            seconds    = 0,
+            pages      = 0,
+        }
+    end
+
+    withStatsDb(nil, function(conn)
+        local sql = string.format([[
+            SELECT date(start_time, 'unixepoch', 'localtime') AS day,
+                   SUM(sum_dur) AS total_sec,
+                   COUNT(*)     AS total_pages
+            FROM (
+                SELECT start_time,
+                       SUM(duration) AS sum_dur
+                FROM page_stat
+                WHERE start_time >= %d
+                GROUP BY id_book, page, date(start_time, 'unixepoch', 'localtime')
+            )
+            GROUP BY day
+        ]], period_start_ts)
+
+        withStatement(conn, sql, function(stmt)
+            for row in stmt:rows() do
+                local day_str = row[1]
+                local secs  = tonumber(row[2]) or 0
+                local pages = tonumber(row[3]) or 0
+                local y, m, d = parseDateYMD(day_str)
+                if y then
+                    local day_ts = os.time({ year = y, month = m, day = d })
+                    local diff_days = math.floor((today_midnight - day_ts) / 86400 + 0.5)
+                    local week_from_end = math.floor(diff_days / 7)  -- 0 = current week
+                    local w = 8 - week_from_end
+                    if w >= 1 and w <= 8 then
+                        weeks[w].seconds = weeks[w].seconds + secs
+                        weeks[w].pages   = weeks[w].pages   + pages
+                    end
+                end
+            end
+        end)
+    end)
+
+    if ENABLE_CACHE then
+        _cache.last8weeks        = weeks
+        _cache.last8weeks_minute = minute
+        _stale_cache.last8weeks  = weeks
+    end
+    return weeks
+end
+
+-- Build and show the 8-week trend popup for the given metric:
+-- "time_total" | "pages_total" | "time_avg" | "pages_avg".
+function ReadingInsightsPopup:showWeeklyTrendPopup(metric)
+    local weeks = self:getLast8WeeksData()
+    if not weeks or #weeks == 0 then
+        UIManager:show(InfoMessage:new{ text = _("No streak dates") })
+        return
+    end
+
+    local has_data = false
+    for _, w in ipairs(weeks) do
+        if (w.seconds or 0) > 0 or (w.pages or 0) > 0 then
+            has_data = true
+            break
+        end
+    end
+    if not has_data then
+        UIManager:show(InfoMessage:new{ text = _("No reading data in the last 8 weeks") })
+        return
+    end
+
+    local fonts  = getCachedFonts()
+    local inner_padding = Size.padding.large
+    local box_width   = math.floor(Screen:getWidth() * 0.86)
+    local chart_width = box_width - 2 * inner_padding
+
+    local title_w = TextWidget:new{ text = trendTitle(metric), face = fonts.section }
+    local title_centered = CenterContainer:new{
+        dimen = Geom:new{ w = chart_width, h = title_w:getSize().h }, title_w,
+    }
+
+    local value_w = TextWidget:new{ text = totalForMetric(metric, weeks), face = fonts.value }
+    local value_centered = CenterContainer:new{
+        dimen = Geom:new{ w = chart_width, h = value_w:getSize().h }, value_w,
+    }
+
+    local chart_widget = buildLine8WeekChart(weeks, metric, chart_width, fonts)
+
+    local content = VerticalGroup:new{
+        align = "center",
+        title_centered,
+        VerticalSpan:new{ height = Size.padding.default },
+        value_centered,
+        VerticalSpan:new{ height = Size.padding.large },
+        chart_widget,
+    }
+
+    local box = FrameContainer:new{
+        background     = Blitbuffer.COLOR_WHITE,
+        bordersize     = Size.border.window,
+        radius         = Size.radius.window,
+        padding_top    = inner_padding,
+        padding_bottom = inner_padding,
+        padding_left   = inner_padding,
+        padding_right  = inner_padding,
+        content,
+    }
+
+    UIManager:show(WeeklyTrendPopup:new{ box_content = box })
+end
+
 local function getBooksForPeriod(period_format, period_value)
     local books = {}
     return withStatsDb(books, function(conn)
@@ -2096,7 +2518,7 @@ function ReadingInsightsPopup:openCalendarForMonth(year_month)
         ok, CalendarView = pcall(require, "calendarview")
     end
     if not ok or not CalendarView then
-        UIManager:show(InfoMessage:new{ text = "CalendarView nem elérhető" })
+        UIManager:show(InfoMessage:new{ text = _("CalendarView not available") })
         return
     end
 
