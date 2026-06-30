@@ -71,6 +71,8 @@ becomes:
 
 1. Chapter  (41 | 00:44) ........................ 8
 
+Can Enable/Disable in Reader mode / Settings.
+
 Falls back to the original format if the Statistics plugin has no speed data yet (e.g. at the very start of a book).
 
 Requirements: the Statistics plugin must be active and "Show chapter length" must be enabled in the TOC settings.
