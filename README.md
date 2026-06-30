@@ -25,7 +25,7 @@ A full-screen scrollable overlay with a comprehensive overview of your reading h
 
 **Highlights:**
 - **Today** — reading time and pages read so far today
-- **Last week** — 7-day average time and pages per day
+- **Last week** — 7-day average time and pages per day; (tap a value to see an 8-week trend popup)
 - **Streaks** — current and best daily & weekly reading streaks
 - **Yearly view** — hours or days read + pages, navigable by year
 - **Monthly chart** — bar chart of reading activity per month (tappable to see books)
