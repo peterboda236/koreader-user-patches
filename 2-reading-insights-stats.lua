@@ -1,6 +1,6 @@
 --[[
 Reading Insights Popup
-Version 1.2
+Version 1.2.1
 Based on: https://github.com/quanganhdo/koreader-user-patches/blob/main/2-reading-insights-popup.lua
 
 Full-screen scrollable popup showing reading history from statistics.sqlite3.
@@ -18,11 +18,12 @@ Gestures:
   - Tap monthly chart header           cycle hours/days/books mode
   - Tap on Streak                      show the streak period date
   - Long press title bar               force-reload all data from DB
-  - Long press monthly chart header    open CalendarView for the current month
+  - Long press current month           open CalendarView for the current month
   - Swipe left/right                   change year
   - Swipe down / any key               close
   - Tap on book list element           show book stats
   - Tap value in Last week section     show 8-week trend popup (line chart)
+  - Tap Today in Last week             open Today Timeline
 
 Monthly chart modes (cycle by tapping header):
   hours  – reading time per month (HH:MM bars)
@@ -348,15 +349,14 @@ local function getLangBase()
     return _cached_lang_base
 end
 
--- Number formatting: HU uses space/comma, EN uses comma/period.
--- Small integers (< 10 000, no decimals) skip the regex for speed.
 -- Format a YYYY-MM-DD string for display (EN: DD/MM/YYYY, HU: YYYY.MM.DD.)
-local function formatDateForDisplay(date_str)
+-- no_trailing_dot: HU only - omit the final dot (used for the first date in a range)
+local function formatDateForDisplay(date_str, no_trailing_dot)
     if not date_str then return "?" end
     local y, m, d = date_str:match("^(%d+)-(%d+)-(%d+)$")
     if not y then return date_str end
     if getLangBase() == "hu" then
-        return string.format("%s.%s.%s.", y, m, d)
+        return string.format("%s.%s.%s%s", y, m, d, no_trailing_dot and "" or ".")
     else
         return string.format("%s/%s/%s", d, m, y)
     end
@@ -1041,6 +1041,9 @@ local function buildMonthlyChart(popup_self, monthly_data, layout, fonts)
                 popup_self:showBooksForMonth(month_data.month, month_year_label)
                 return true
             end
+            if is_current then
+                popup_self._current_month_bar_widget = tappable_bar
+            end
 
             table.insert(bars_row, tappable_bar)
 
@@ -1404,8 +1407,23 @@ local function buildWeeklyChart(popup_self, daily_data, layout, fonts)
             dimen = Geom:new{ w = bar_width, h = total_bar_height },
             bar_column,
         }
-
-        table.insert(bars_row, bar_container)
+        
+        if i == 1 then
+            local tappable_bar = InputContainer:new{
+                dimen = Geom:new{ x = 0, y = 0, w = bar_width, h = total_bar_height },
+                bar_container,
+            }
+            tappable_bar.ges_events = {
+                Tap = { GestureRange:new{ ges = "tap", range = tappable_bar.dimen } },
+            }
+            function tappable_bar:onTap()
+                popup_self:openTodayTimeline()   -- ⬅ ITT, ez a csere
+                return true
+            end
+            table.insert(bars_row, tappable_bar)
+        else
+            table.insert(bars_row, bar_container)
+        end
 
         local day_label_widget = TextWidget:new{ text = d.label, face = font_small }
         table.insert(day_labels_row, CenterContainer:new{
@@ -1450,22 +1468,22 @@ local function showStreakDatePopup(dates, is_weekly)
     end
     local start_str, end_str
     if is_weekly then
-        -- entries_desc: dates.start = latest week, dates.end_ = earliest week
-        local mon_from = weekStrToMondayDate(dates.end_)   -- earliest week → Monday
-        local mon_to   = weekStrToMondayDate(dates.start)  -- latest week → Sunday
+        -- entries_desc: dates.start = earliest week, dates.end_ = latest week
+        local mon_from = weekStrToMondayDate(dates.start)  -- earliest week → Monday
+        local mon_to   = weekStrToMondayDate(dates.end_)    -- latest week → Sunday
         local sun_to
         if mon_to then
             sun_to = os.date("%Y-%m-%d", os.time({ year = tonumber(mon_to:sub(1,4)),
                 month = tonumber(mon_to:sub(6,7)), day = tonumber(mon_to:sub(9,10)) }) + 6 * 86400)
         end
-        start_str = formatDateForDisplay(mon_from)
+        start_str = formatDateForDisplay(mon_from, true)
         end_str   = formatDateForDisplay(sun_to or mon_to)
     else
         -- entries_desc: dates.start = earliest date, dates.end_ = latest date
-        start_str = formatDateForDisplay(dates.start)
+        start_str = formatDateForDisplay(dates.start, true)
         end_str   = formatDateForDisplay(dates.end_)
     end
-    local msg = start_str .. "–" .. end_str
+    local msg = start_str .. " – " .. end_str
     UIManager:show(InfoMessage:new{ text = msg })
 end
 
@@ -1680,8 +1698,6 @@ local function buildInsightsSections(popup_self, streaks, yearly_stats, year_ran
             popup_self:cycleInsightsMode()
             return true
         end
-        -- Store widget ref for pos-based Hold dispatch in onHold.
-        popup_self._chart_header_widget = tappable_chart_header
         addSectionWithRow(sections, tappable_chart_header, chart, layout, { add_divider = true, no_bottom_line = false })
     end
 
@@ -2584,6 +2600,89 @@ function ReadingInsightsPopup:openCalendarForMonth(year_month)
     end)
 end
 
+-- Open today's reading timeline (CalendarDayView) for the current day.
+-- Closes this popup first; reopens it when the timeline is dismissed.
+function ReadingInsightsPopup:openTodayTimeline()
+    local ok, CalendarView = pcall(require, "ui/widget/calendarview")
+    if not ok or not CalendarView then
+        ok, CalendarView = pcall(require, "calendarview")
+    end
+    if not ok or not CalendarView then
+        UIManager:show(InfoMessage:new{ text = _("CalendarView not available") })
+        return
+    end
+
+    -- Save state so the popup can be recreated after the timeline closes.
+    local saved_year             = self.selected_year
+    local saved_mode             = self.mode
+    local saved_ui               = self.ui
+    local saved_streaks          = self._streaks
+    local saved_yr               = self._year_range
+    local saved_yearly           = self._yearly
+    local saved_monthly          = self._monthly
+    local saved_all_time         = self._all_time
+    local saved_last_week        = self._last_week
+    local saved_last_week_daily  = self._last_week_daily
+
+    self._closed = true
+    UIManager:close(self)
+
+    -- Wait one frame so the popup is fully closed before opening the timeline.
+    UIManager:scheduleIn(0, function()
+        local stats_plugin = saved_ui and saved_ui.statistics or nil
+        if not stats_plugin then
+            UIManager:show(InfoMessage:new{ text = _("CalendarView not available") })
+            return
+        end
+
+        local function reopen_popup()
+            local p = ReadingInsightsPopup:new{
+                ui               = saved_ui,
+                selected_year    = saved_year,
+                mode             = saved_mode,
+                _streaks         = saved_streaks,
+                _year_range      = saved_yr,
+                _yearly          = saved_yearly,
+                _monthly         = saved_monthly,
+                _all_time        = saved_all_time,
+                _last_week       = saved_last_week,
+                _last_week_daily = saved_last_week_daily,
+            }
+            UIManager:show(p)
+        end
+
+        local reopened = false
+        local function reopen_once()
+            if reopened then return end
+            reopened = true
+            UIManager:scheduleIn(0, reopen_popup)
+        end
+
+        -- CalendarView:showCalendarDayView() builds and shows the day's
+        -- CalendarDayView for us (its day_ts logic respects the user's
+        -- configured calendar_day_start_hour/minute), but it doesn't expose
+        -- a close_callback hook. We build a CalendarView purely to call
+        -- that helper (it's never itself shown), and intercept the single
+        -- UIManager:show() call it makes so we can attach our own
+        -- close_callback / onCloseWidget before the widget is painted.
+        local cv = CalendarView:new{ reader_statistics = stats_plugin }
+
+        local orig_show = UIManager.show
+        UIManager.show = function(mgr, widget, ...)
+            UIManager.show = orig_show -- one-shot: restore immediately
+            widget.close_callback = reopen_once
+            local orig_onCloseWidget = widget.onCloseWidget
+            widget.onCloseWidget = function(self_w, ...)
+                if orig_onCloseWidget then orig_onCloseWidget(self_w, ...) end
+                reopen_once()
+            end
+            return orig_show(mgr, widget, ...)
+        end
+
+        cv:showCalendarDayView(stats_plugin)
+    end)
+end
+
 -- Open CalendarView for today's month.
 function ReadingInsightsPopup:openCalendarForCurrentMonth()
     local year_month = os.date("%Y-%m")
@@ -2907,9 +3006,9 @@ function ReadingInsightsPopup:onHold(arg, ges_ev)
         end)
         return true
     end
-
-    if self._chart_header_widget then
-        local d = self._chart_header_widget.dimen
+    
+    if self._current_month_bar_widget then
+        local d = self._current_month_bar_widget.dimen
         if d and pos.x >= d.x and pos.x <= d.x + d.w
               and pos.y >= d.y and pos.y <= d.y + d.h then
             self:openCalendarForCurrentMonth()
