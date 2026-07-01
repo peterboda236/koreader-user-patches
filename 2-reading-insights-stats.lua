@@ -1,6 +1,6 @@
 --[[
 Reading Insights Popup
-Version 1.2.1
+Version 1.2.2
 Based on: https://github.com/quanganhdo/koreader-user-patches/blob/main/2-reading-insights-popup.lua
 
 Full-screen scrollable popup showing reading history from statistics.sqlite3.
@@ -23,7 +23,7 @@ Gestures:
   - Swipe down / any key               close
   - Tap on book list element           show book stats
   - Tap value in Last week section     show 8-week trend popup (line chart)
-  - Tap Today in Last week             open Today Timeline
+  - Long press Today in Last week      open Today Timeline
 
 Monthly chart modes (cycle by tapping header):
   hours  – reading time per month (HH:MM bars)
@@ -1461,7 +1461,9 @@ end
 
 -- Show an InfoMessage with the period start/end dates for a streak.
 -- dates table: { start = "YYYY-MM-DD" or "YYYY-WW", end_ = same }, is_weekly = bool
-local function showStreakDatePopup(dates, is_weekly)
+-- is_current: true = current streak, false = best streak. When given, a label
+-- naming which streak's period is shown is prepended above the date range.
+local function showStreakDatePopup(dates, is_weekly, is_current)
     if not dates then
         UIManager:show(InfoMessage:new{ text = _("No streak dates") })
         return
@@ -1484,6 +1486,10 @@ local function showStreakDatePopup(dates, is_weekly)
         end_str   = formatDateForDisplay(dates.end_)
     end
     local msg = start_str .. " – " .. end_str
+    if is_current ~= nil then
+        local label = is_current and _("CURRENT STREAK") or _("BEST STREAK")
+        msg = label .. "\n" .. msg
+    end
     UIManager:show(InfoMessage:new{ text = msg })
 end
 
@@ -1590,7 +1596,7 @@ local function buildInsightsSections(popup_self, streaks, yearly_stats, year_ran
     }
     tap_current_header.ges_events = { Tap = { GestureRange:new{ ges="tap", range=tap_current_header.dimen } } }
     function tap_current_header:onTap()
-        showStreakDatePopup(streaks.current_days_dates, false)
+        showStreakDatePopup(streaks.current_days_dates, false, true)
         return true
     end
 
@@ -1600,7 +1606,7 @@ local function buildInsightsSections(popup_self, streaks, yearly_stats, year_ran
     }
     tap_best_header.ges_events = { Tap = { GestureRange:new{ ges="tap", range=tap_best_header.dimen } } }
     function tap_best_header:onTap()
-        showStreakDatePopup(streaks.best_days_dates, false)
+        showStreakDatePopup(streaks.best_days_dates, false, false)
         return true
     end
 
@@ -1625,13 +1631,13 @@ local function buildInsightsSections(popup_self, streaks, yearly_stats, year_ran
         dimen = Geom:new{ x=0, y=0, w=layout.col_width, h=cd_line:getSize().h }, cd_line,
     }
     tap_cd.ges_events = { Tap = { GestureRange:new{ ges="tap", range=tap_cd.dimen } } }
-    function tap_cd:onTap() showStreakDatePopup(streaks.current_days_dates, false) return true end
+    function tap_cd:onTap() showStreakDatePopup(streaks.current_days_dates, false, true) return true end
 
     local tap_bd = InputContainer:new{
         dimen = Geom:new{ x=0, y=0, w=layout.col_width, h=bd_line:getSize().h }, bd_line,
     }
     tap_bd.ges_events = { Tap = { GestureRange:new{ ges="tap", range=tap_bd.dimen } } }
-    function tap_bd:onTap() showStreakDatePopup(streaks.best_days_dates, false) return true end
+    function tap_bd:onTap() showStreakDatePopup(streaks.best_days_dates, false, false) return true end
 
     local days_row = buildTwoColRow(tap_cd, tap_bd, layout)
 
@@ -1643,13 +1649,13 @@ local function buildInsightsSections(popup_self, streaks, yearly_stats, year_ran
         dimen = Geom:new{ x=0, y=0, w=layout.col_width, h=cw_line:getSize().h }, cw_line,
     }
     tap_cw.ges_events = { Tap = { GestureRange:new{ ges="tap", range=tap_cw.dimen } } }
-    function tap_cw:onTap() showStreakDatePopup(streaks.current_weeks_dates, true) return true end
+    function tap_cw:onTap() showStreakDatePopup(streaks.current_weeks_dates, true, true) return true end
 
     local tap_bw = InputContainer:new{
         dimen = Geom:new{ x=0, y=0, w=layout.col_width, h=bw_line:getSize().h }, bw_line,
     }
     tap_bw.ges_events = { Tap = { GestureRange:new{ ges="tap", range=tap_bw.dimen } } }
-    function tap_bw:onTap() showStreakDatePopup(streaks.best_weeks_dates, true) return true end
+    function tap_bw:onTap() showStreakDatePopup(streaks.best_weeks_dates, true, false) return true end
 
     local weeks_row = buildTwoColRow(tap_cw, tap_bw, layout)
 
