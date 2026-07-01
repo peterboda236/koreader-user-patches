@@ -16,26 +16,9 @@ Adds a **Night Mode** toggle button directly to the bottom of the built-in front
 
 ---
 
-### 📊 Reading Insights
+### 📊 Reading Insights - Patch moved to plugin
 **`2-reading-insights-stats.lua`**
-
-<img width="384" height="512" alt="FileManager_2026-06-30_074746" src="https://github.com/user-attachments/assets/cf248698-75d0-4948-8d9c-70ea5c69fd5e" />
-
-A full-screen scrollable overlay with a comprehensive overview of your reading history, powered by KOReader's statistics database.
-
-**Highlights:**
-- **Today** — reading time and pages read so far today
-- **Last week** — 7-day average time and pages per day; (tap a value to see an 8-week trend popup)
-- **Streaks** — current and best daily & weekly reading streaks
-- **Yearly view** — hours or days read + pages, navigable by year
-- **Monthly chart** — bar chart of reading activity per month (tappable to see books)
-- **All-time totals** — cumulative hours and pages across all years
-
-**Controls:** swipe left/right to change year, tap bars to open book lists, tap the chart header to toggle hours/days mode, long-press to force-reload data.
-
-**Caching:** uses a stale-while-revalidate strategy — the popup opens instantly with cached data while fresh values load in the background.
-
-**Localization:** includes built-in English and Hungarian translations; additional languages can be added in the `PATCH_L10N` table.
+Plugin can be downloaded from here: https://github.com/peterboda236/readinginsights.koplugin
 
 ---
 
