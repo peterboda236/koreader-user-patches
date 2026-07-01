@@ -1,6 +1,6 @@
 --[[
 Reading Insights Popup
-Version 1.2.2
+Version 1.2.2.1
 Based on: https://github.com/quanganhdo/koreader-user-patches/blob/main/2-reading-insights-popup.lua
 
 Full-screen scrollable popup showing reading history from statistics.sqlite3.
@@ -18,12 +18,12 @@ Gestures:
   - Tap monthly chart header           cycle hours/days/books mode
   - Tap on Streak                      show the streak period date
   - Long press title bar               force-reload all data from DB
-  - Long press current month           open CalendarView for the current month
   - Swipe left/right                   change year
   - Swipe down / any key               close
   - Tap on book list element           show book stats
   - Tap value in Last week section     show 8-week trend popup (line chart)
-  - Long press Today in Last week      open Today Timeline
+  - Tap on Today in Last week          open Today Timeline
+  - Long Press on Current month        open Calendar View
 
 Monthly chart modes (cycle by tapping header):
   hours  – reading time per month (HH:MM bars)
