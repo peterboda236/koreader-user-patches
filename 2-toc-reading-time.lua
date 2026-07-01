@@ -3,7 +3,7 @@
 -- Falls back to original if Statistics plugin has no data yet.
 -- Adds a toggle "Show chapter time" right next to "Show chapter length"
 -- in the main reader menu (Settings -> ToC settings).
--- Version 1.1
+-- Version 1.1.1
 
 local ReaderToc = require("apps/reader/modules/readertoc")
 local reader_menu_order = require("ui/elements/reader_menu_order")
@@ -30,9 +30,23 @@ local function injectTime(self)
     if not G_reader_settings:isTrue("toc_items_show_chapter_time") then return end
     local stats = self.ui and self.ui.statistics
     if not stats or not self.toc then return end
-    for _, v in ipairs(self.toc) do
+    for i, v in ipairs(self.toc) do
         if v.chapter_length and v.chapter_length > 0 then
-            local time_str = stats:getTimeForPages(v.chapter_length)
+            local has_children = false
+            local next_item = self.toc[i + 1]
+            if next_item and next_item.depth and v.depth and next_item.depth > v.depth then
+                has_children = true
+            end
+
+            local pages_for_time
+            if not has_children then
+                pages_for_time = v.page and self:getChapterPagesLeft(v.page, true)
+            end
+            if not pages_for_time or pages_for_time <= 0 then
+                pages_for_time = v.chapter_length
+            end
+
+            local time_str = stats:getTimeForPages(pages_for_time)
             if time_str and time_str ~= "" then
                 v.chapter_length = tostring(v.chapter_length) .. " | " .. time_str
             end
