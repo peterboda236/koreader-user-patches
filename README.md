@@ -6,6 +6,25 @@ A collection of user patches for [KOReader](https://github.com/koreader/koreader
 
 ## Patches
 
+### 🌙 Frontlight Widget — Night Mode & Light Profiles
+
+**`2-frontlight-widget-profiles.lua`**
+
+<img width="384" height="512" alt="FileManager_2026-07-01_123610" src="https://github.com/user-attachments/assets/8fbf2b2a-a176-4c6d-b4e8-9efa6ea5845f" />
+
+
+Extends the built-in frontlight widget with a **Night Mode** toggle and **5 savable light profiles**, laid out as:
+
+- Row 1: Night Mode · Profile 1 · Profile 2
+- Row 2: Profile 3 · Profile 4 · Profile 5
+
+**Highlights:**
+- **Tap** a profile button to instantly apply its saved brightness, warmth (on natural-light devices), and night-mode state.
+- **Long-press** a profile button to rename and save the *current* frontlight settings into that slot.
+- Profile names are editable and persist across restarts.
+
+---
+
 ### 🌙 Frontlight Widget — Night Mode Toggle
 **`2-frontlight-widget-nightmode.lua`**
 
