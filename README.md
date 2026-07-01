@@ -35,8 +35,8 @@ Adds a **Night Mode** toggle button directly to the bottom of the built-in front
 
 ---
 
-### 📊 Reading Insights - Patch moved to plugin
-**`2-reading-insights-stats.lua`**
+### 📊 Reading Insights - Migrated a patch to a plugin in KOReader
+
 Plugin can be downloaded from here: https://github.com/peterboda236/readinginsights.koplugin
 
 ---
