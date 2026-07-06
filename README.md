@@ -35,30 +35,6 @@ Adds a **Night Mode** toggle button directly to the bottom of the built-in front
 
 ---
 
-### 📊 Reading Insights - Migrated a patch to a plugin in KOReader
-
-Plugin can be downloaded from here: https://github.com/peterboda236/readinginsights.koplugin
-
----
-
-### 📖 Reading Stats Popup
-**`2-reading-stats-popup.lua`**
-
-<img width="384" height="512" alt="kép" src="https://github.com/user-attachments/assets/5f951bc0-a50a-416a-91dc-bb63a43f14ea" />
-
-A compact overlay displayed while reading, showing live statistics for the current book.
-
-**Highlights:**
-- **This chapter / Next chapter** — estimated time left in the current chapter and time to read the next one
-- **This book** — overall progress percentage, pages read, time spent, and time remaining
-- **Chapter bar** — visual bar chart of all chapters, proportional to their length, with read/unread/current state; swipeable when there are many chapters
-- **Pace** — today's reading time and pages-per-minute rate
-
-**Controls:** tap anywhere to dismiss, swipe left/right to navigate the chapter bar.
-
----
-
-
 ### 📑 TOC Reading Time
 
 **`2-toc-reading-time.lua`**
@@ -78,6 +54,19 @@ Can Enable/Disable in Reader mode / Settings.
 Falls back to the original format if the Statistics plugin has no speed data yet (e.g. at the very start of a book).
 
 Requirements: the Statistics plugin must be active and "Show chapter length" must be enabled in the TOC settings.
+
+---
+
+### 📊 Reading Insights - Migrated a patch to a plugin in KOReader
+
+Plugin can be downloaded from here: https://github.com/peterboda236/readinginsights.koplugin
+
+---
+
+### 📖 Reading Stats Popup - Merged into Reading insights plugin
+
+Plugin can be downloaded from here: https://github.com/peterboda236/readinginsights.koplugin
+
 
 ---
 
