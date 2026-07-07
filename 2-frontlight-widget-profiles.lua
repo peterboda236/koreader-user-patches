@@ -1,6 +1,6 @@
 --[[
 FrontLight Widget — Night Mode & Light Profiles
-Version 1.0.2
+Version 1.0.3
 
 Extends KOReader's built-in Frontlight dialog (without modifying the base
 widget file) with:
@@ -255,11 +255,6 @@ function FrontLightWidget:applyLightProfile(index)
         return
     end
 
-    if profile.brightness > 0 then
-        self.powerd:turnOnFrontlight()
-    else
-        self.powerd:turnOffFrontlight()
-    end
     if profile.brightness <= 0 then
         self.powerd:turnOffFrontlight()
     else
@@ -270,6 +265,9 @@ function FrontLightWidget:applyLightProfile(index)
         self.powerd:setWarmth(profile.warmth)
     end
 
+    -- Register this as an "interactive" frontlight change so KOReader's
+    -- suspend/resume logic picks up the new state, instead of restoring
+    -- whatever the frontlight state was before this profile was applied.
     self.powerd:updateResumeFrontlightState()
 
     local current_nm = G_reader_settings:isTrue("night_mode")
