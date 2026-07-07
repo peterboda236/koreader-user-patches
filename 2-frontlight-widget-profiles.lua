@@ -1,6 +1,6 @@
 --[[
 FrontLight Widget — Night Mode & Light Profiles
-Version 1.0
+Version 1.0.1
 
 Extends KOReader's built-in Frontlight dialog (without modifying the base
 widget file) with:
@@ -255,6 +255,11 @@ function FrontLightWidget:applyLightProfile(index)
         return
     end
 
+    if profile.brightness > 0 then
+        self.powerd:turnOnFrontlight()
+    else
+        self.powerd:turnOffFrontlight()
+    end
     self.powerd:setIntensity(profile.brightness)
 
     if profile.warmth and Device:hasNaturalLight() then
