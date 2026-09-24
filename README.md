@@ -57,19 +57,6 @@ Requirements: the Statistics plugin must be active and "Show chapter length" mus
 
 ---
 
-### 📊 Reading Insights - Migrated a patch to a plugin in KOReader
-
-Plugin can be downloaded from here: https://github.com/peterboda236/readinginsights.koplugin
-
----
-
-### 📖 Reading Stats Popup - Merged into Reading insights plugin
-
-Plugin can be downloaded from here: https://github.com/peterboda236/readinginsights.koplugin
-
-
----
-
 ## Installation
 
 Place the `.lua` files into KOReader's `patches` folder on your device:
