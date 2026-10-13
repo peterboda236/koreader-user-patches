@@ -1,6 +1,6 @@
 # KOReader User Patches
 
-A collection of user patches for [KOReader](https://github.com/koreader/koreader) that enhance the reading experience with richer statistics and frontlight controls.
+A collection of user patches for [KOReader](https://github.com/koreader/koreader) that enhance the reading experience.
 
 ---
 
